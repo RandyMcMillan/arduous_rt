@@ -143,7 +143,7 @@ Runs `f` repeatedly and logs min/avg/max timings.
 - `console` — tokio-console wiring for the demo examples. Downstream users must also set `RUSTFLAGS="--cfg tokio_unstable"` for it to produce data (this repo's `.cargo/config.toml` does that for the examples).
 - `unbounded` — removes the 256-runtime registry cap.
 - `explicit_name` — names must be pre-authorized with `allow_name`; an empty allowlist rejects every new name. The bundled `nested_chain`/`stress_chain` helpers use fixed `level_N` names — allow those (or a matching glob) when relying on the helpers.
-- `glob_support` — implies `explicit_name`; allowlist entries may be glob patterns such as `org.gnostr.*` or `org.gnostr.*-debug`.
+- `glob_support` — implies `explicit_name`; allowlist entries may be glob patterns such as `org.gnostr.*` or `org.gnostr.*-debug`. Hierarchy note: `/` separates levels, so `org.gnostr/*` matches one level while `org.gnostr/**` matches a whole subtree — its root included.
 - `governance` — implies both filters; adds deny rules that override allows (`deny_name`), per-pattern quotas (`set_quota`, `NameError::QuotaExceeded`), introspection (`registered_patterns`, `list_runtimes`), domain tokens (`DomainToken` + `named_runtime_in` + `DomainToken::mint` for sub-domains), atomic policy swaps (`set_policy`), per-pattern runtime configs (`allow_configured` — worker counts, thread names), thread budgets (`set_thread_quota`, `NameError::ThreadBudgetExceeded`), a 256-event audit log (`audit_events`), and structured tracing events on governance decisions.
 - `policy-toml` — implies `governance`; loads a `Policy` from a TOML document (`policy_from_toml`), keeping serde/toml out of the base dependency tree.
 

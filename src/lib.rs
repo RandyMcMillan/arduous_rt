@@ -321,13 +321,29 @@ fn validate_glob(pattern: &str) -> Result<globset::GlobSet, NameError> {
         .map_err(|err| NameError::InvalidPattern(format!("{pattern}: {err}")))
 }
 
-/// First pattern that matches `name`: an exact pattern-string match or a
-/// glob hit. Registration order makes matching deterministic.
+/// A pattern's fixed head: the pattern with a trailing wildcard segment
+/// removed (`org.gnostr.*` -> `org.gnostr`). Used to match subtree roots
+/// without letting sibling subtrees (`org.gnostr.blocked.*`) claim them.
+#[cfg(feature = "governance")]
+fn strip_glob_tail(pattern: &str) -> &str {
+    for suffix in [".*", "/*", "/**"] {
+        if let Some(head) = pattern.strip_suffix(suffix) {
+            return head;
+        }
+    }
+    pattern
+}
+
+/// First pattern that matches `name`: an exact pattern-string match, a
+/// glob hit, or a pattern whose fixed head equals `name` (so the root of
+/// a subtree is governed by patterns for that subtree: `org.gnostr` is
+/// covered by `org.gnostr.*` but not by `org.gnostr.blocked.*`).
+/// Registration order makes matching deterministic.
 #[cfg(feature = "governance")]
 fn find_match<'a>(patterns: &'a [(String, globset::GlobSet)], name: &str) -> Option<&'a str> {
     patterns
         .iter()
-        .find(|(p, g)| p == name || g.is_match(name))
+        .find(|(p, g)| p == name || g.is_match(name) || strip_glob_tail(p) == name)
         .map(|(p, _)| p.as_str())
 }
 
@@ -1760,6 +1776,21 @@ mod tests {
         assert!(matches!(
             try_named_runtime("tb_demo.c"),
             Err(NameError::ThreadBudgetExceeded { max: 2, .. })
+        ));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_domain_root_matches_subtree_pattern() {
+        allow_test_names();
+        allow_name("root_demo.*").unwrap();
+        deny_name("root_demo.blocked.*").unwrap();
+        // The root of a subtree is governed by patterns for that subtree.
+        assert!(DomainToken::acquire("root_demo").is_ok());
+        assert!(try_named_runtime("root_demo").is_ok());
+        assert!(matches!(
+            try_named_runtime("root_demo.blocked"),
+            Err(NameError::Denied { .. })
         ));
     }
 

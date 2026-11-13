@@ -20,7 +20,7 @@ here protects against accidents, unbounded growth, and ops policy
 violations — not adversarial code. No cgroups, no seccomp, no process
 isolation. Say so in docs wherever the feature is described.
 
-## Phase 0 — v0.8: deny rules, quotas, audit ✅ implemented (unreleased)
+## Phase 0 — v0.8: deny rules, quotas, audit ✅ implemented (released in 0.8.0)
 
 Feature gate: `governance` (implies `explicit_name` + `glob_support`;
 the two existing features keep working as aliases).
@@ -39,7 +39,7 @@ the two existing features keep working as aliases).
   `quota_exceeded { pattern, max }`. (The `tracing` facade is already
   the crate's observability story.)
 
-## Phase 1 — v0.9: capabilities + declarative policy ✅ implemented (unreleased)
+## Phase 1 — v0.9: capabilities + declarative policy ✅ implemented (released in 0.8.0)
 
 Turns the naming convention into enforcement.
 
@@ -57,7 +57,7 @@ Turns the naming convention into enforcement.
   implemented as `DomainToken::mint`: the sub-domain goes through the
   same policy check as acquire, so delegation cannot exceed policy.
 
-## Phase 2 — v1.0: resource shaping ✅ implemented (unreleased)
+## Phase 2 — v1.0: resource shaping ✅ implemented (released in 0.8.0)
 
 - **Per-pattern runtime configs.** `allow_configured(pattern, RuntimeConfig)`
   where `RuntimeConfig` covers worker thread count, thread name prefix,
