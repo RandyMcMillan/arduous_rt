@@ -23,12 +23,14 @@ make clippy
 make fmt
 ```
 
-Before committing any change to `src/lib.rs` or `tests/`, run all three
-feature combinations — they exercise different cfg paths:
+Before committing any change to `src/lib.rs` or `tests/`, run the feature
+combinations — they exercise different cfg paths:
 
 ```bash
 cargo test
 cargo test --features explicit_name
+cargo test --features governance
+cargo test --features policy-toml
 cargo test --all-features
 ```
 
@@ -93,3 +95,10 @@ timeout 5s cargo run --example demo_starvation
   `examples/deferred_loom_registry.rs` (loom model of the registry race)
   and `examples/deferred_rwlock_registry.rs` (RwLock lookup path). Read
   them before re-litigating those decisions.
+- Policy-swap tests live in `tests/governance_policy.rs` in their own
+  binary on purpose: `set_policy` replaces global registry state, and
+  cargo runs test binaries sequentially. Do not move them into
+  `tests/arduous.rs`.
+- The governance design lives in `docs/governance-plan.md` (all three
+  phases implemented); keep it in sync when changing governance
+  behavior.

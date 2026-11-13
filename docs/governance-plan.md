@@ -56,7 +56,7 @@ Turns the naming convention into enforcement.
 - Sub-token delegation (a token minting narrower sub-domain tokens) is a
   candidate here but can be deferred without blocking the rest.
 
-## Phase 2 — v1.0: resource shaping
+## Phase 2 — v1.0: resource shaping ✅ implemented (unreleased)
 
 - **Per-pattern runtime configs.** `allow_configured(pattern, RuntimeConfig)`
   where `RuntimeConfig` covers worker thread count, thread name prefix,
