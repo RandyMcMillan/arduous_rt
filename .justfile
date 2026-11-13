@@ -22,6 +22,9 @@ consumer-smoke:
 backcompat:
   @make backcompat
 
+tokio-compat:
+  @make tokio-compat
+
 test-all:
   @make test-all
 

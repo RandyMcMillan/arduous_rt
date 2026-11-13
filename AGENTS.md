@@ -64,6 +64,13 @@ smoke against every version in `scripts/backcompat_versions.txt`
 ./scripts/backcompat_check.sh
 ```
 
+Tokio floor check — compiles arduous_rt against the minimum tokio version
+declared in Cargo.toml, catching APIs newer than the declared floor:
+
+```bash
+./scripts/tokio_compat_check.sh
+```
+
 ## Project conventions
 
 - One topic per commit; never stack uncommitted edits; split hunks when

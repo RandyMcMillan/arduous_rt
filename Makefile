@@ -36,6 +36,9 @@ consumer-smoke: ## Downstream governance smoke test (local crate; pass VERSION t
 backcompat: ## Backwards-compat check against published versions (scripts/backcompat_versions.txt)
 	./scripts/backcompat_check.sh
 
+tokio-compat: ## Verify the declared tokio floor compiles arduous_rt
+	./scripts/tokio_compat_check.sh
+
 test-all: ## Run all tests including ignored (nocapture), then build all examples
 	cargo test -- --include-ignored --nocapture
 	cargo build --examples
