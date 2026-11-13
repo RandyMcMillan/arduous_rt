@@ -750,6 +750,25 @@ impl DomainToken {
     pub fn domain(&self) -> &str {
         &self.domain
     }
+
+    /// Mint a token for a sub-domain, e.g. `org.gnostr` →
+    /// `org.gnostr/wallet`. The sub-domain goes through the same policy
+    /// check as [`acquire`](Self::acquire), so a parent token cannot
+    /// delegate where policy says no.
+    ///
+    /// # Errors
+    ///
+    /// Returns the policy rejection for the sub-domain, or
+    /// [`NameError::OutsideDomain`] when `sub` is empty.
+    pub fn mint(&self, sub: &str) -> Result<Self, NameError> {
+        if sub.is_empty() {
+            return Err(NameError::OutsideDomain {
+                name: String::new(),
+                domain: self.domain.clone(),
+            });
+        }
+        Self::acquire(&format!("{}/{}", self.domain, sub))
+    }
 }
 
 /// Get or create a runtime that must live at or below `token`'s domain:
@@ -1680,6 +1699,28 @@ mod tests {
         assert!(matches!(
             DomainToken::acquire("nowhere.atall"),
             Err(NameError::NotAllowed { .. })
+        ));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_token_mints_subdomain_tokens() {
+        allow_test_names();
+        allow_name("mint_demo").unwrap();
+        allow_name("mint_demo/*").unwrap();
+        deny_name("mint_demo/secret.*").unwrap();
+        let root = DomainToken::acquire("mint_demo").unwrap();
+        let wallet = root.mint("wallet").unwrap();
+        assert_eq!(wallet.domain(), "mint_demo/wallet");
+        assert!(named_runtime_in(&wallet, "mint_demo/wallet/pay").is_ok());
+        // Delegation stops where policy says no.
+        assert!(matches!(
+            root.mint("secret.thing"),
+            Err(NameError::Denied { .. })
+        ));
+        assert!(matches!(
+            root.mint(""),
+            Err(NameError::OutsideDomain { .. })
         ));
     }
 

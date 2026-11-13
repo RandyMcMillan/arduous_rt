@@ -53,8 +53,9 @@ Turns the naming convention into enforcement.
 - **Declarative loading.** `policy-toml` feature: load a `Policy` from a
   TOML file at startup, so ops can ship/audit policy separately from
   code. Keeps serde/toml out of the base dependency tree.
-- Sub-token delegation (a token minting narrower sub-domain tokens) is a
-  candidate here but can be deferred without blocking the rest.
+- Sub-token delegation (a token minting narrower sub-domain tokens) is
+  implemented as `DomainToken::mint`: the sub-domain goes through the
+  same policy check as acquire, so delegation cannot exceed policy.
 
 ## Phase 2 — v1.0: resource shaping ✅ implemented (unreleased)
 
