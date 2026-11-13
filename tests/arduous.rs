@@ -1,8 +1,45 @@
 use arduous_rt::{available_threads, banner, named_runtime, nested_chain, run};
+use std::panic::PanicHookInfo;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{Barrier, RwLock, Semaphore, broadcast, mpsc, watch};
 use tokio::task::JoinSet;
 use tokio::time::{Duration, timeout};
+
+/// Frames every panic fired while the guard is alive with banner lines on
+/// stderr, labelled with the owning test name. The previous hook is
+/// chained (so the original panic message still prints) and restored on
+/// drop. Process-global by nature of `std::panic::set_hook`; the frame is
+/// cosmetic and safe under parallel tests — worst case a panic prints
+/// unframed or double-framed during overlap.
+struct PanicFrame {
+    previous: Arc<dyn Fn(&PanicHookInfo<'_>) + Sync + Send>,
+}
+
+impl PanicFrame {
+    fn new(test_name: &str) -> Self {
+        let previous: Arc<dyn Fn(&PanicHookInfo<'_>) + Sync + Send> =
+            Arc::from(std::panic::take_hook());
+        let chained = previous.clone();
+        let title = format!("EXPECTED PANIC (negative test — {test_name})");
+        std::panic::set_hook(Box::new(move |info| {
+            eprintln!("============================================================");
+            eprintln!(" {title}");
+            eprintln!("============================================================");
+            chained(info);
+            eprintln!("============================================================");
+            eprintln!(" END EXPECTED PANIC");
+            eprintln!("============================================================");
+        }));
+        Self { previous }
+    }
+}
+
+impl Drop for PanicFrame {
+    fn drop(&mut self) {
+        let previous = self.previous.clone();
+        std::panic::set_hook(Box::new(move |info| previous(info)));
+    }
+}
 
 #[test]
 fn arduous_deep_nesting() {
@@ -233,6 +270,8 @@ fn arduous_timeout_and_cancellation() {
 #[test]
 fn arduous_error_propagation() {
     let rt = named_runtime("arduous_error");
+    banner("[negative test] arduous_error_propagation: intentional task panic expected below");
+    let _panic_frame = PanicFrame::new("arduous_error_propagation");
     let handle = rt.spawn(async {
         panic!("boom");
     });
@@ -639,6 +678,10 @@ fn arduous_nested_timeouts() {
 #[test]
 fn arduous_panic_recovery() {
     let rt = named_runtime("arduous_panic_recovery");
+    banner(
+        "[negative test] arduous_panic_recovery: intentional panics for i % 5 == 0 expected below",
+    );
+    let _panic_frame = PanicFrame::new("arduous_panic_recovery");
     let n = 50usize;
     let result = rt.block_on(async {
         let mut handles = Vec::with_capacity(n);
@@ -1130,6 +1173,10 @@ fn arduous_ordered_sequence() {
 #[test]
 fn arduous_joinset_with_errors() {
     let rt = named_runtime("arduous_joinset_errors");
+    banner(
+        "[negative test] arduous_joinset_with_errors: intentional panics for i % 7 == 0 expected below",
+    );
+    let _panic_frame = PanicFrame::new("arduous_joinset_with_errors");
     let n = 100usize;
     let result = rt.block_on(async {
         let mut set = JoinSet::new();
