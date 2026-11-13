@@ -3,6 +3,12 @@ name = "arduous_rt"
 version = "0.4.0"
 edition = "2024"
 readme = "README.md"
+description = "Process-global named Tokio runtimes with nesting, reentrancy-safe execution, and stress-testing helpers"
+license = "MIT"
+repository = "https://github.com/RandyMcMillan/arduous_rt"
+keywords = ["tokio", "runtime", "async", "concurrency"]
+categories = ["asynchronous", "concurrency"]
+rust-version = "1.85"
 
 [features]
 console = ["dep:console-subscriber"]
