@@ -7,11 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-13
+
 ### Fixed
 
 - Domain roots are governed by subtree patterns: `org.gnostr` is now
-  authorized — and denied — by `org.gnostr.*`. Found by the downstream
-  consumer smoke test against the published 0.8.0.
+  authorized — and denied — by `org.gnostr/**`, without sibling
+  subtrees (`org.gnostr/blocked.*`) claiming the root. Found by the
+  downstream consumer smoke test against the published 0.8.0.
 
 ## [0.8.0] - 2026-11-13
 
