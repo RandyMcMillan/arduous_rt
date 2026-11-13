@@ -1,3 +1,48 @@
+//! Named, lazily-created tokio runtimes that compose.
+//!
+//! This crate keeps a process-wide registry of tokio runtimes, each
+//! identified by a name. A runtime is created on first use and reused
+//! everywhere else the same name is requested, from any thread or task.
+//!
+//! # Process-wide and forever
+//!
+//! Runtimes are intentionally leaked: they are never shut down and their
+//! worker threads live until the process exits. Distinct names grow
+//! threads and memory without bound, so reuse names rather than minting
+//! new ones.
+//!
+//! # Nested chains
+//!
+//! [`nested_chain`] builds runtimes named `level_0`, `level_1`, ... .
+//! The names are global, so two chains of the same depth share runtimes.
+//!
+//! # Reentrancy
+//!
+//! [`run`] detects when it is already executing on the target runtime and
+//! polls the future inline instead of spawning, so
+//! `rt.block_on(run(rt, async { .. }))` cannot deadlock. By contrast,
+//! calling [`Runtime::block_on`](tokio::runtime::Runtime::block_on)
+//! directly inside a task running on the same runtime deadlocks; see the
+//! `demo_deadlock` example.
+//!
+//! # Observability
+//!
+//! Library diagnostics are emitted through [`tracing`]; install a
+//! subscriber such as `tracing_subscriber::fmt` in your binary to see
+//! them. [`macro@arduous_trace`] emits info-level events from application
+//! code through the same facade.
+//!
+//! # Examples
+//!
+//! ```
+//! let rt = arduous_rt::named_runtime("example");
+//! let value = rt.block_on(async { 2 + 2 });
+//! assert_eq!(value, 4);
+//!
+//! // Same name, same runtime.
+//! assert!(std::ptr::eq(rt, arduous_rt::named_runtime("example")));
+//! ```
+
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::future::Future;
@@ -18,12 +63,32 @@ macro_rules! arduous_trace {
     };
 }
 
+/// Return the shared runtime named `"global"`.
+///
+/// # Examples
+///
+/// ```
+/// let rt = arduous_rt::global_rt();
+/// let value = rt.block_on(async { 2 + 2 });
+/// assert_eq!(value, 4);
+/// ```
 //global_rt
 pub fn global_rt() -> &'static tokio::runtime::Runtime {
     named_runtime("global")
 }
 
 /// Obtain (or lazily create) a dedicated tokio runtime identified by `name`.
+///
+/// Runtimes are never shut down; the same `&'static` runtime is returned
+/// for a given name until the process exits.
+///
+/// # Examples
+///
+/// ```
+/// let a = arduous_rt::named_runtime("my_runtime");
+/// let b = arduous_rt::named_runtime("my_runtime");
+/// assert!(std::ptr::eq(a, b));
+/// ```
 pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
     static RUNTIMES: Lazy<Mutex<HashMap<String, &'static tokio::runtime::Runtime>>> =
         Lazy::new(|| Mutex::new(HashMap::new()));
@@ -74,6 +139,10 @@ pub fn nested_chain(n: usize) -> Vec<&'static tokio::runtime::Runtime> {
 }
 
 /// Return the deepest runtime of an `n`-level nested chain.
+///
+/// # Panics
+///
+/// Panics if `n` is 0.
 pub fn nested_leaf(n: usize) -> &'static tokio::runtime::Runtime {
     let chain = nested_chain(n);
     chain.last().copied().expect("n must be > 0")
@@ -88,6 +157,25 @@ pub fn is_running_on(rt: &'static tokio::runtime::Runtime) -> bool {
 }
 
 /// Run a future on `rt`, safely handling reentrant execution.
+///
+/// If the current async context already belongs to `rt`, the future is
+/// polled inline; otherwise it is spawned on `rt` and awaited to
+/// completion. This keeps `rt.block_on(run(rt, ..))` compositions from
+/// deadlocking, unlike nesting [`Runtime::block_on`], which does.
+///
+/// [`Runtime::block_on`]: tokio::runtime::Runtime::block_on
+///
+/// # Panics
+///
+/// Panics if the spawned task panics.
+///
+/// # Examples
+///
+/// ```
+/// let rt = arduous_rt::named_runtime("run_example");
+/// let value = rt.block_on(arduous_rt::run(rt, async { 40 + 2 }));
+/// assert_eq!(value, 42);
+/// ```
 pub async fn run<R, F>(rt: &'static tokio::runtime::Runtime, fut: F) -> R
 where
     R: Send + 'static,
@@ -134,6 +222,10 @@ where
 }
 
 /// Run `f` repeatedly and report simple timing statistics.
+///
+/// # Panics
+///
+/// Panics if `iterations` is 0.
 pub fn benchmark(label: &str, iterations: usize, mut f: impl FnMut()) {
     assert!(iterations > 0, "iterations must be > 0");
     let mut min = u128::MAX;
@@ -152,6 +244,10 @@ pub fn benchmark(label: &str, iterations: usize, mut f: impl FnMut()) {
 }
 
 /// Run an async `f` repeatedly and report simple timing statistics.
+///
+/// # Panics
+///
+/// Panics if `iterations` is 0.
 pub async fn benchmark_async<F, Fut>(label: &str, iterations: usize, mut f: F)
 where
     F: FnMut() -> Fut,
