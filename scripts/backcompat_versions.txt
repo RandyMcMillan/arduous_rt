@@ -2,5 +2,11 @@
 #
 # Plain VERSION must pass the governance consumer smoke — a failure is a
 # regression against a release. VERSION! (trailing bang) is pinned as
-# expected-to-fail, documenting a known bug fixed in a later release.
+# expected-to-fail, documenting a known gap fixed in a later release.
+#
+# 0.7.0 predates the governance features the smoke exercises.
+# 0.8.0 lacks subtree-root governance (fixed in 0.8.1).
+0.7.0!
 0.8.0!
+0.8.1
+0.8.2

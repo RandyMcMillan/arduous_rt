@@ -23,7 +23,9 @@ cd "$TMP"
 
 cargo init -q --name gov_consumer
 if [ -n "$VERSION" ]; then
-    cargo add "arduous_rt@$VERSION" --features governance,policy-toml -q
+    # '=' pins the exact release; a bare version would be a caret range
+    # and silently float to the newest patch (defeating the matrix).
+    cargo add "arduous_rt@=$VERSION" --features governance,policy-toml -q
 else
     cargo add arduous_rt --path "$ROOT" --features governance,policy-toml -q
 fi
