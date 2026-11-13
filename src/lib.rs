@@ -18,6 +18,9 @@
 //! `glob_support` feature (which implies `explicit_name`) allows glob
 //! patterns in the allowlist, so hierarchical names such as
 //! `org.gnostr.wallet` can be authorized by registering `org.gnostr.*`.
+//! Because cargo features unify across the dependency graph, a dependency
+//! can enable `explicit_name` for a build that never opted in; the
+//! rejection message explains how to authorize a name or opt back out.
 //!
 //! # Nested chains
 //!
@@ -95,7 +98,12 @@ pub fn global_rt() -> &'static tokio::runtime::Runtime {
 pub enum NameError {
     /// The name is not authorized by the allowlist.
     #[cfg(feature = "explicit_name")]
-    NotAllowed(String),
+    NotAllowed {
+        /// The rejected name.
+        name: String,
+        /// How many patterns were registered at the time of rejection.
+        registered: usize,
+    },
     /// The registry is full; enable the `unbounded` feature to lift the cap.
     RegistryFull,
     /// The allowlist entry is not a valid glob pattern.
@@ -107,7 +115,22 @@ impl fmt::Display for NameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             #[cfg(feature = "explicit_name")]
-            Self::NotAllowed(name) => write!(f, "runtime name {name:?} is not allowed"),
+            Self::NotAllowed { name, registered } => {
+                if *registered == 0 {
+                    write!(
+                        f,
+                        "runtime name {name:?} is not allowed: the explicit_name filter is active but the allowlist is empty\n\
+                         hint: authorize names with arduous_rt::allow_name(...) during startup, or remove the explicit_name feature\n\
+                         note: cargo features unify across the dependency graph, so a dependency may have enabled explicit_name for this build"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "runtime name {name:?} is not allowed: it matches none of the {registered} registered patterns\n\
+                         hint: authorize it with arduous_rt::allow_name({name:?}) or remove the explicit_name feature"
+                    )
+                }
+            }
             Self::RegistryFull => write!(f, "runtime registry is full"),
             #[cfg(feature = "glob_support")]
             Self::InvalidPattern(pattern) => write!(f, "invalid glob pattern {pattern:?}"),
@@ -220,7 +243,10 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
     #[cfg(feature = "explicit_name")]
     {
         if guard.allowed.is_empty() {
-            return Err(NameError::NotAllowed(name.to_string()));
+            return Err(NameError::NotAllowed {
+                name: name.to_string(),
+                registered: 0,
+            });
         }
         if !guard.allowed.contains(name) {
             #[cfg(feature = "glob_support")]
@@ -229,7 +255,10 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
                     return create_runtime(name, &mut guard);
                 }
             }
-            return Err(NameError::NotAllowed(name.to_string()));
+            return Err(NameError::NotAllowed {
+                name: name.to_string(),
+                registered: guard.allowed.len(),
+            });
         }
     }
 
@@ -759,12 +788,25 @@ mod tests {
 
     #[cfg(feature = "explicit_name")]
     #[test]
+    fn filter_empty_allowlist_message_is_actionable() {
+        let err = NameError::NotAllowed {
+            name: "foo".into(),
+            registered: 0,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("allowlist is empty"));
+        assert!(msg.contains("allow_name"));
+        assert!(msg.contains("unify"));
+    }
+
+    #[cfg(feature = "explicit_name")]
+    #[test]
     fn filter_rejects_unregistered_name() {
         allow_test_names();
         assert!(!is_name_allowed("filter_probe_unregistered_xyz"));
         assert!(matches!(
             try_named_runtime("filter_probe_unregistered_xyz"),
-            Err(NameError::NotAllowed(_))
+            Err(NameError::NotAllowed { .. })
         ));
     }
 
