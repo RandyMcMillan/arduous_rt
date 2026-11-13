@@ -21,7 +21,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-arduous_rt = "0.6"
+arduous_rt = "0.7"
 ```
 
 For local development, use a path dependency instead:
