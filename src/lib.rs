@@ -131,7 +131,11 @@ impl fmt::Display for NameError {
                     )
                 }
             }
-            Self::RegistryFull => write!(f, "runtime registry is full"),
+            Self::RegistryFull => write!(
+                f,
+                "runtime registry is full\n\
+                 hint: enable the `unbounded` feature to lift the cap"
+            ),
             #[cfg(feature = "glob_support")]
             Self::InvalidPattern(pattern) => write!(f, "invalid glob pattern {pattern:?}"),
         }
