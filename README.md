@@ -134,6 +134,18 @@ Runs a synchronous closure or async future while logging elapsed time.
 
 Runs `f` repeatedly and logs min/avg/max timings.
 
+## Cargo features
+
+- `console` — tokio-console wiring for the demo examples.
+- `unbounded` — removes the 256-runtime registry cap.
+- `explicit_name` — names must be pre-authorized with `allow_name`; an empty allowlist rejects every new name.
+- `glob_support` — implies `explicit_name`; allowlist entries may be glob patterns such as `org.gnostr.*` or `org.gnostr.*-debug`.
+
+```rust
+arduous_rt::allow_name("org.gnostr.*").unwrap();
+let rt = arduous_rt::named_runtime("org.gnostr.wallet"); // allowed by the glob
+```
+
 ## Examples
 
 Run the bundled examples:

@@ -41,8 +41,82 @@ impl Drop for PanicFrame {
     }
 }
 
+fn allow_test_names() {
+    #[cfg(feature = "explicit_name")]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let mut names: Vec<String> = [
+                "arduous_recursive_outer",
+                "arduous_recursive_outer/inner",
+                "arduous_massive",
+                "arduous_timeout",
+                "arduous_error",
+                "arduous_spawn_blocking",
+                "arduous_reentrancy3",
+                "arduous_tree_root2",
+                "tree2/d1",
+                "tree2/d2",
+                "tree2/d3",
+                "tree2/d4",
+                "arduous_cross_a2",
+                "arduous_cross_b2",
+                "arduous_stream_a2",
+                "arduous_stream_b2",
+                "arduous_joinset",
+                "arduous_nested_timeouts",
+                "arduous_panic_recovery",
+                "arduous_rand_delays2",
+                "arduous_watch2",
+                "arduous_semaphore2",
+                "arduous_rwlock2",
+                "arduous_abort_storm2",
+                "arduous_multi_thread_spawn",
+                "arduous_large_payload_a",
+                "arduous_large_payload_b",
+                "arduous_select_many",
+                "arduous_timer_stress",
+                "arduous_handle_clone",
+                "arduous_deadline_cascade",
+                "arduous_idempotent_shared",
+                "arduous_atomic",
+                "arduous_retry",
+                "arduous_deep_recursion",
+                "arduous_handle_clone_stress",
+                "arduous_nested_cancel_outer",
+                "arduous_nested_cancel_outer/inner",
+                "arduous_ordered_a",
+                "arduous_ordered_b",
+                "arduous_joinset_errors",
+                "arduous_closed_a",
+                "arduous_closed_b",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect();
+            for i in 0..8 {
+                names.push(format!("arduous_concurrent_{i}"));
+            }
+            // nested_chain builds cumulative paths: level_0, level_0/level_1, ...
+            // arduous_deep_nesting reaches depth 32.
+            let mut path = String::new();
+            for i in 0..32 {
+                if !path.is_empty() {
+                    path.push('/');
+                }
+                path.push_str(&format!("level_{i}"));
+                names.push(path.clone());
+            }
+            for name in &names {
+                let _ = arduous_rt::allow_name(name);
+            }
+        });
+    }
+}
+
 #[test]
 fn arduous_deep_nesting() {
+    allow_test_names();
     let depth = 32usize;
     let chain = nested_chain(depth);
     assert_eq!(chain.len(), depth);
@@ -65,6 +139,7 @@ fn arduous_deep_nesting() {
 
 #[test]
 fn arduous_recursive_runtime_creation() {
+    allow_test_names();
     let outer = named_runtime("arduous_recursive_outer");
     let result = outer.block_on(async {
         // Create a child runtime from within a task and use it.
@@ -77,6 +152,7 @@ fn arduous_recursive_runtime_creation() {
 
 #[test]
 fn arduous_concurrent_runtime_creation() {
+    allow_test_names();
     let threads = available_threads().clamp(2, 8);
     let mut handles = Vec::new();
     for i in 0..threads {
@@ -100,6 +176,7 @@ fn arduous_concurrent_runtime_creation() {
 
 #[test]
 fn arduous_massive_task_spawn() {
+    allow_test_names();
     let rt = named_runtime("arduous_massive");
     let n = 10_000usize;
     let result = rt.block_on(async {
@@ -123,6 +200,7 @@ fn arduous_massive_task_spawn() {
 
 #[test]
 fn arduous_cross_runtime_channel_stress() {
+    allow_test_names();
     let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let tasks_per = 100usize;
@@ -183,6 +261,7 @@ fn arduous_cross_runtime_channel_stress() {
 
 #[test]
 fn arduous_shared_state_mutex() {
+    allow_test_names();
     let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let counter = Arc::new(Mutex::new(0i64));
@@ -215,6 +294,7 @@ fn arduous_shared_state_mutex() {
 
 #[test]
 fn arduous_barrier_sync() {
+    allow_test_names();
     let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let barrier = Arc::new(Barrier::new(depth));
@@ -244,6 +324,7 @@ fn arduous_barrier_sync() {
 
 #[test]
 fn arduous_timeout_and_cancellation() {
+    allow_test_names();
     let rt = named_runtime("arduous_timeout");
     // Timeout on a future that never completes.
     let res = rt.block_on(async {
@@ -269,6 +350,7 @@ fn arduous_timeout_and_cancellation() {
 
 #[test]
 fn arduous_error_propagation() {
+    allow_test_names();
     let rt = named_runtime("arduous_error");
     banner("[negative test] arduous_error_propagation: intentional task panic expected below");
     let _panic_frame = PanicFrame::new("arduous_error_propagation");
@@ -282,6 +364,7 @@ fn arduous_error_propagation() {
 
 #[test]
 fn arduous_spawn_blocking_cpu() {
+    allow_test_names();
     let rt = named_runtime("arduous_spawn_blocking");
     let result = rt.block_on(async {
         let h = rt.spawn_blocking(|| {
@@ -315,6 +398,7 @@ fn reentrant_sum(
 
 #[test]
 fn arduous_reentrancy_under_load() {
+    allow_test_names();
     let rt = named_runtime("arduous_reentrancy3");
     let depth = 200usize;
     let result = rt.block_on(reentrant_sum(rt, depth, 0));
@@ -327,6 +411,7 @@ fn arduous_reentrancy_under_load() {
 
 #[test]
 fn arduous_high_fanout() {
+    allow_test_names();
     let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let tasks_per = 64usize;
@@ -361,6 +446,7 @@ fn arduous_high_fanout() {
 
 #[test]
 fn arduous_randomized_delays_deterministic() {
+    allow_test_names();
     let rt = named_runtime("arduous_rand_delays2");
     let n = 200usize;
     let result = rt.block_on(async {
@@ -388,6 +474,7 @@ fn arduous_randomized_delays_deterministic() {
 
 #[test]
 fn arduous_broadcast_across_runtimes() {
+    allow_test_names();
     let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let (tx, _) = broadcast::channel::<i64>(1024);
@@ -426,6 +513,7 @@ fn arduous_broadcast_across_runtimes() {
 
 #[test]
 fn arduous_watch_coordination() {
+    allow_test_names();
     let rt = named_runtime("arduous_watch2");
     let (tx, rx) = watch::channel(0i64);
     let result = rt.block_on(async {
@@ -445,6 +533,7 @@ fn arduous_watch_coordination() {
 
 #[test]
 fn arduous_semaphore_backpressure() {
+    allow_test_names();
     let rt = named_runtime("arduous_semaphore2");
     let sem = Arc::new(Semaphore::new(4));
     let n = 50usize;
@@ -474,6 +563,7 @@ fn arduous_semaphore_backpressure() {
 
 #[test]
 fn arduous_rwlock_stress() {
+    allow_test_names();
     let rt = named_runtime("arduous_rwlock2");
     let lock = Arc::new(RwLock::new(0i64));
     let n = 100usize;
@@ -511,6 +601,7 @@ fn arduous_rwlock_stress() {
 
 #[test]
 fn arduous_abort_storm() {
+    allow_test_names();
     let rt = named_runtime("arduous_abort_storm2");
     let n = 200usize;
     let result = rt.block_on(async {
@@ -544,6 +635,7 @@ fn arduous_abort_storm() {
 
 #[test]
 fn arduous_nested_fanout_tree() {
+    allow_test_names();
     fn spawn_tree(
         rt: &'static tokio::runtime::Runtime,
         depth: usize,
@@ -581,6 +673,7 @@ fn arduous_nested_fanout_tree() {
 
 #[test]
 fn arduous_join_handle_cross_runtime() {
+    allow_test_names();
     let rt_a = named_runtime("arduous_cross_a2");
     let rt_b = named_runtime("arduous_cross_b2");
     let handle = rt_a.spawn(async { 123i64 });
@@ -591,6 +684,7 @@ fn arduous_join_handle_cross_runtime() {
 
 #[test]
 fn arduous_channel_streaming_large() {
+    allow_test_names();
     let rt_a = named_runtime("arduous_stream_a2");
     let rt_b = named_runtime("arduous_stream_b2");
     let (tx, mut rx) = mpsc::channel::<i64>(1024);
@@ -634,6 +728,7 @@ fn arduous_channel_streaming_large() {
 
 #[test]
 fn arduous_joinset_fanout() {
+    allow_test_names();
     let rt = named_runtime("arduous_joinset");
     let n = 1_000usize;
     let result = rt.block_on(async {
@@ -657,6 +752,7 @@ fn arduous_joinset_fanout() {
 
 #[test]
 fn arduous_nested_timeouts() {
+    allow_test_names();
     let rt = named_runtime("arduous_nested_timeouts");
     let result = rt.block_on(async {
         // Outer timeout wraps an inner timeout that fires first.
@@ -677,6 +773,7 @@ fn arduous_nested_timeouts() {
 
 #[test]
 fn arduous_panic_recovery() {
+    allow_test_names();
     let rt = named_runtime("arduous_panic_recovery");
     banner(
         "[negative test] arduous_panic_recovery: intentional panics for i % 5 == 0 expected below",
@@ -724,6 +821,7 @@ fn arduous_panic_recovery() {
 
 #[test]
 fn arduous_channel_closed_detection() {
+    allow_test_names();
     let rt_a = named_runtime("arduous_closed_a");
     let rt_b = named_runtime("arduous_closed_b");
     let (tx, mut rx) = mpsc::channel::<i64>(8);
@@ -756,6 +854,7 @@ fn arduous_channel_closed_detection() {
 
 #[test]
 fn arduous_multi_thread_spawning() {
+    allow_test_names();
     let rt = named_runtime("arduous_multi_thread_spawn");
     let handle = rt.handle().clone();
     let threads = available_threads().clamp(2, 8);
@@ -795,6 +894,7 @@ fn arduous_multi_thread_spawning() {
 
 #[test]
 fn arduous_large_payload_channel() {
+    allow_test_names();
     let rt_a = named_runtime("arduous_large_payload_a");
     let rt_b = named_runtime("arduous_large_payload_b");
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4);
@@ -840,6 +940,7 @@ fn arduous_large_payload_channel() {
 
 #[test]
 fn arduous_select_many_channels() {
+    allow_test_names();
     let rt = named_runtime("arduous_select_many");
     let n = 100usize;
     let result = rt.block_on(async {
@@ -875,6 +976,7 @@ fn arduous_select_many_channels() {
 
 #[test]
 fn arduous_timer_stress() {
+    allow_test_names();
     let rt = named_runtime("arduous_timer_stress");
     let n = 1_000usize;
     let result = rt.block_on(async {
@@ -901,6 +1003,7 @@ fn arduous_timer_stress() {
 
 #[test]
 fn arduous_runtime_handle_clone() {
+    allow_test_names();
     let rt = named_runtime("arduous_handle_clone");
     let cloned = rt.handle().clone();
     let h1 = rt.spawn(async { 1i64 });
@@ -912,6 +1015,7 @@ fn arduous_runtime_handle_clone() {
 
 #[test]
 fn arduous_deadline_cascade() {
+    allow_test_names();
     let rt = named_runtime("arduous_deadline_cascade");
     let result = rt.block_on(async {
         // Three nested timeouts; innermost completes in time, middle allows, outer allows.
@@ -934,6 +1038,7 @@ fn arduous_deadline_cascade() {
 
 #[test]
 fn arduous_idempotent_named_runtime() {
+    allow_test_names();
     let name = "arduous_idempotent_shared";
     let threads = available_threads().clamp(2, 8);
     let mut handles = Vec::new();
@@ -956,6 +1061,7 @@ fn arduous_idempotent_named_runtime() {
 
 #[test]
 fn arduous_atomic_counter_cross_runtime() {
+    allow_test_names();
     use std::sync::atomic::{AtomicU64, Ordering};
     let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
@@ -988,6 +1094,7 @@ fn arduous_atomic_counter_cross_runtime() {
 
 #[test]
 fn arduous_fanin_bounded_channel() {
+    allow_test_names();
     let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let tasks_per = 50usize;
@@ -1047,6 +1154,7 @@ fn arduous_fanin_bounded_channel() {
 
 #[test]
 fn arduous_broadcast_fanout() {
+    allow_test_names();
     let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let (tx, _) = broadcast::channel::<i64>(1024);
@@ -1078,6 +1186,7 @@ fn arduous_broadcast_fanout() {
 
 #[test]
 fn arduous_nested_task_cancellation() {
+    allow_test_names();
     let outer = named_runtime("arduous_nested_cancel_outer");
     let inner = arduous_rt::child_runtime("arduous_nested_cancel_outer", "inner");
 
@@ -1114,6 +1223,7 @@ fn arduous_nested_task_cancellation() {
 
 #[test]
 fn arduous_retry_backoff() {
+    allow_test_names();
     let rt = named_runtime("arduous_retry");
     let result = rt.block_on(async {
         let mut attempts = 0u32;
@@ -1133,6 +1243,7 @@ fn arduous_retry_backoff() {
 
 #[test]
 fn arduous_ordered_sequence() {
+    allow_test_names();
     let rt_a = named_runtime("arduous_ordered_a");
     let rt_b = named_runtime("arduous_ordered_b");
     let (tx, mut rx) = mpsc::channel::<usize>(16);
@@ -1172,6 +1283,7 @@ fn arduous_ordered_sequence() {
 
 #[test]
 fn arduous_joinset_with_errors() {
+    allow_test_names();
     let rt = named_runtime("arduous_joinset_errors");
     banner(
         "[negative test] arduous_joinset_with_errors: intentional panics for i % 7 == 0 expected below",
@@ -1218,6 +1330,7 @@ fn arduous_joinset_with_errors() {
 
 #[test]
 fn arduous_deep_async_recursion() {
+    allow_test_names();
     fn recurse(
         rt: &'static tokio::runtime::Runtime,
         n: usize,
@@ -1245,6 +1358,7 @@ fn arduous_deep_async_recursion() {
 
 #[test]
 fn arduous_runtime_handle_clone_stress() {
+    allow_test_names();
     let rt = named_runtime("arduous_handle_clone_stress");
     let base = rt.handle().clone();
     let threads = available_threads().clamp(2, 8);

@@ -13,9 +13,12 @@ rust-version = "1.85"
 [features]
 console = ["dep:console-subscriber"]
 unbounded = []
+explicit_name = []
+glob_support = ["explicit_name", "dep:globset"]
 
 [dependencies]
 console-subscriber = { version = "0.4", optional = true }
+globset = { version = "0.4", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "tracing"] }
 tracing = "0.1"
 

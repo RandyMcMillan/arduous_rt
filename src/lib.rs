@@ -13,6 +13,12 @@
 //! panics on the 257th distinct name; enable the `unbounded` feature to
 //! remove the cap. Never derive names from untrusted input.
 //!
+//! With the `explicit_name` feature, names must first be authorized with
+//! `allow_name`, and an empty allowlist rejects every new name. The
+//! `glob_support` feature (which implies `explicit_name`) allows glob
+//! patterns in the allowlist, so hierarchical names such as
+//! `org.gnostr.wallet` can be authorized by registering `org.gnostr.*`.
+//!
 //! # Nested chains
 //!
 //! [`nested_chain`] builds runtimes named `level_0`, `level_1`, ... .
@@ -37,6 +43,8 @@
 //! # Examples
 //!
 //! ```
+//! # #[cfg(feature = "explicit_name")]
+//! # arduous_rt::allow_name("example").unwrap();
 //! let rt = arduous_rt::named_runtime("example");
 //! let value = rt.block_on(async { 2 + 2 });
 //! assert_eq!(value, 4);
@@ -45,7 +53,8 @@
 //! assert!(std::ptr::eq(rt, arduous_rt::named_runtime("example")));
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::future::Future;
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
@@ -69,6 +78,8 @@ macro_rules! arduous_trace {
 /// # Examples
 ///
 /// ```
+/// # #[cfg(feature = "explicit_name")]
+/// # arduous_rt::allow_name("global").unwrap();
 /// let rt = arduous_rt::global_rt();
 /// let value = rt.block_on(async { 2 + 2 });
 /// assert_eq!(value, 4);
@@ -78,20 +89,90 @@ pub fn global_rt() -> &'static tokio::runtime::Runtime {
     named_runtime("global")
 }
 
+/// Reason a runtime name was rejected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NameError {
+    /// The name is not authorized by the allowlist.
+    #[cfg(feature = "explicit_name")]
+    NotAllowed(String),
+    /// The registry is full; enable the `unbounded` feature to lift the cap.
+    RegistryFull,
+    /// The allowlist entry is not a valid glob pattern.
+    #[cfg(feature = "glob_support")]
+    InvalidPattern(String),
+}
+
+impl fmt::Display for NameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            #[cfg(feature = "explicit_name")]
+            Self::NotAllowed(name) => write!(f, "runtime name {name:?} is not allowed"),
+            Self::RegistryFull => write!(f, "runtime registry is full"),
+            #[cfg(feature = "glob_support")]
+            Self::InvalidPattern(pattern) => write!(f, "invalid glob pattern {pattern:?}"),
+        }
+    }
+}
+
+impl std::error::Error for NameError {}
+
 /// Maximum number of distinct named runtimes kept in the registry.
 /// Reached only when `unbounded` is disabled.
 #[cfg(not(feature = "unbounded"))]
 const MAX_RUNTIMES: usize = 256;
 
-/// Panics if the registry is at capacity.
+struct Registry {
+    runtimes: HashMap<String, &'static tokio::runtime::Runtime>,
+    #[cfg(feature = "explicit_name")]
+    allowed: HashSet<String>,
+    #[cfg(feature = "glob_support")]
+    compiled: globset::GlobSet,
+}
+
+static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
+    Mutex::new(Registry {
+        runtimes: HashMap::new(),
+        #[cfg(feature = "explicit_name")]
+        allowed: HashSet::new(),
+        #[cfg(feature = "glob_support")]
+        compiled: globset::GlobSet::empty(),
+    })
+});
+
 #[cfg(not(feature = "unbounded"))]
-fn assert_registry_has_capacity(len: usize, name: &str) {
+fn check_capacity(len: usize) -> Result<(), NameError> {
     if len >= MAX_RUNTIMES {
-        panic!(
-            "named_runtime(\"{name}\"): registry is full ({MAX_RUNTIMES} runtimes); \
-             reuse names or enable the 'unbounded' feature"
-        );
+        return Err(NameError::RegistryFull);
     }
+    Ok(())
+}
+
+#[cfg(feature = "glob_support")]
+fn compile_allowed(allowed: &HashSet<String>) -> globset::GlobSet {
+    use globset::GlobSetBuilder;
+    let mut builder = GlobSetBuilder::new();
+    for pattern in allowed {
+        if let Ok(glob) = globset::Glob::new(pattern) {
+            builder.add(glob);
+        }
+    }
+    builder
+        .build()
+        .expect("allowlist patterns are validated at registration")
+}
+
+fn create_runtime(
+    name: &str,
+    guard: &mut Registry,
+) -> Result<&'static tokio::runtime::Runtime, NameError> {
+    #[cfg(not(feature = "unbounded"))]
+    check_capacity(guard.runtimes.len())?;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let leaked: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
+    guard.runtimes.insert(name.to_string(), leaked);
+    tracing::info!("named_runtime({name}) created");
+    Ok(leaked)
 }
 
 /// Obtain (or lazily create) a dedicated tokio runtime identified by `name`.
@@ -101,36 +182,120 @@ fn assert_registry_has_capacity(len: usize, name: &str) {
 ///
 /// # Panics
 ///
-/// Panics if the registry is full. By default at most 256 distinct runtimes
-/// are kept; enable the `unbounded` feature to remove the cap.
+/// Panics if the name is rejected (with the `explicit_name` feature, names
+/// must first be authorized via `allow_name`) or if the registry is full
+/// (by default at most 256 runtimes; enable `unbounded` to remove the cap).
 ///
 /// # Examples
 ///
 /// ```
+/// # #[cfg(feature = "explicit_name")]
+/// # arduous_rt::allow_name("my_runtime").unwrap();
 /// let a = arduous_rt::named_runtime("my_runtime");
 /// let b = arduous_rt::named_runtime("my_runtime");
 /// assert!(std::ptr::eq(a, b));
 /// ```
 pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
-    static RUNTIMES: LazyLock<Mutex<HashMap<String, &'static tokio::runtime::Runtime>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
+    try_named_runtime(name).unwrap_or_else(|err| panic!("{err}"))
+}
 
+/// Fallible variant of [`named_runtime`]: rejected names and a full
+/// registry surface as `Err` instead of a panic.
+///
+/// # Errors
+///
+/// With the `explicit_name` feature enabled, returns
+/// `NameError::NotAllowed` when the allowlist does not authorize `name`.
+/// Returns `NameError::RegistryFull` when the registry is at capacity
+/// (see the `unbounded` feature).
+pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime, NameError> {
     // Poison-safe: a panic while holding the lock must not take down all
     // future lookups; the registry invariant survives a partial insert.
-    let mut guard = RUNTIMES.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(rt) = guard.get(name) {
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(rt) = guard.runtimes.get(name) {
         tracing::info!("named_runtime({name}) reused");
-        return rt;
+        return Ok(rt);
     }
 
-    #[cfg(not(feature = "unbounded"))]
-    assert_registry_has_capacity(guard.len(), name);
+    #[cfg(feature = "explicit_name")]
+    {
+        if guard.allowed.is_empty() {
+            return Err(NameError::NotAllowed(name.to_string()));
+        }
+        if !guard.allowed.contains(name) {
+            #[cfg(feature = "glob_support")]
+            {
+                if guard.compiled.is_match(name) {
+                    return create_runtime(name, &mut guard);
+                }
+            }
+            return Err(NameError::NotAllowed(name.to_string()));
+        }
+    }
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let leaked: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
-    guard.insert(name.to_string(), leaked);
-    tracing::info!("named_runtime({name}) created");
-    leaked
+    create_runtime(name, &mut guard)
+}
+
+/// Authorize a runtime name, or (with `glob_support`) a glob pattern such
+/// as `org.gnostr.*` or `org.gnostr.*-debug`.
+///
+/// Requires the `explicit_name` feature. While any entries are registered,
+/// only matching names may be created; an empty allowlist rejects every
+/// new name. Names created before an entry is removed keep their runtime.
+///
+/// # Errors
+///
+/// Returns `NameError::InvalidPattern` when `glob_support` is enabled and
+/// `pattern` is not a valid glob.
+#[cfg(feature = "explicit_name")]
+pub fn allow_name(pattern: &str) -> Result<(), NameError> {
+    #[cfg(feature = "glob_support")]
+    if let Err(err) = globset::Glob::new(pattern) {
+        return Err(NameError::InvalidPattern(format!("{pattern}: {err}")));
+    };
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    guard.allowed.insert(pattern.to_string());
+    #[cfg(feature = "glob_support")]
+    {
+        guard.compiled = compile_allowed(&guard.allowed);
+    }
+    Ok(())
+}
+
+/// Remove an allowlist entry. Returns whether the entry was registered.
+///
+/// Requires the `explicit_name` feature.
+#[cfg(feature = "explicit_name")]
+pub fn disallow_name(pattern: &str) -> bool {
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    let removed = guard.allowed.remove(pattern);
+    #[cfg(feature = "glob_support")]
+    if removed {
+        guard.compiled = compile_allowed(&guard.allowed);
+    }
+    removed
+}
+
+/// Whether `name` would pass the allowlist right now.
+///
+/// Requires the `explicit_name` feature. An empty allowlist rejects all
+/// names.
+#[cfg(feature = "explicit_name")]
+pub fn is_name_allowed(name: &str) -> bool {
+    let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.allowed.is_empty() {
+        return false;
+    }
+    guard.allowed.contains(name) || {
+        #[cfg(feature = "glob_support")]
+        {
+            guard.compiled.is_match(name)
+        }
+        #[cfg(not(feature = "glob_support"))]
+        {
+            false
+        }
+    }
 }
 
 /// Create (or reuse) a child runtime scoped under a parent runtime name.
@@ -192,6 +357,8 @@ pub fn is_running_on(rt: &'static tokio::runtime::Runtime) -> bool {
 /// # Examples
 ///
 /// ```
+/// # #[cfg(feature = "explicit_name")]
+/// # arduous_rt::allow_name("run_example").unwrap();
 /// let rt = arduous_rt::named_runtime("run_example");
 /// let value = rt.block_on(arduous_rt::run(rt, async { 40 + 2 }));
 /// assert_eq!(value, 42);
@@ -335,8 +502,49 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
+    fn allow_test_names() {
+        #[cfg(feature = "explicit_name")]
+        {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| {
+                let mut names: Vec<String> = [
+                    "global",
+                    "distinct_a3",
+                    "distinct_b3",
+                    "coop_producer3",
+                    "coop_consumer3",
+                    "complex_producer3",
+                    "complex_consumer3",
+                    "reentrant_rt2",
+                    "nested_outer3",
+                    "nested_outer3/inner",
+                    "a2",
+                    "a2/b2",
+                    "a2/b2/c2",
+                ]
+                .into_iter()
+                .map(String::from)
+                .collect();
+                // nested_chain builds cumulative paths: level_0, level_0/level_1, ...
+                // stress_chain() reaches depth 16.
+                let mut path = String::new();
+                for i in 0..16 {
+                    if !path.is_empty() {
+                        path.push('/');
+                    }
+                    path.push_str(&format!("level_{i}"));
+                    names.push(path.clone());
+                }
+                for name in &names {
+                    let _ = allow_name(name);
+                }
+            });
+        }
+    }
+
     #[test]
     fn global_rt_works() {
+        allow_test_names();
         let rt = global_rt();
         let result = rt.block_on(async { 2 + 2 });
         assert_eq!(result, 4);
@@ -344,6 +552,7 @@ mod tests {
 
     #[test]
     fn named_runtimes_are_distinct() {
+        allow_test_names();
         let a = named_runtime("distinct_a3");
         let b = named_runtime("distinct_b3");
         assert!(!std::ptr::eq(a, b));
@@ -352,6 +561,7 @@ mod tests {
 
     #[test]
     fn runtimes_cooperate_via_channel() {
+        allow_test_names();
         let producer = named_runtime("coop_producer3");
         let consumer = named_runtime("coop_consumer3");
 
@@ -367,6 +577,7 @@ mod tests {
 
     #[test]
     fn complex_cooperation_aggregates_results() {
+        allow_test_names();
         let producer = named_runtime("complex_producer3");
         let consumer = named_runtime("complex_consumer3");
 
@@ -394,6 +605,7 @@ mod tests {
 
     #[test]
     fn nested_reentrant_run() {
+        allow_test_names();
         let rt = named_runtime("reentrant_rt2");
         let result = rt.block_on(async { run(rt, async { 7 }).await });
         assert_eq!(result, 7);
@@ -401,6 +613,7 @@ mod tests {
 
     #[test]
     fn parent_child_runtime_composition() {
+        allow_test_names();
         let outer = named_runtime("nested_outer3");
         let inner = child_runtime("nested_outer3", "inner");
 
@@ -410,6 +623,7 @@ mod tests {
 
     #[test]
     fn deeply_nested_runtime_path() {
+        allow_test_names();
         let rt = nested_runtime(&["a2", "b2", "c2"]);
         let result = rt.block_on(async { 1 + 2 });
         assert_eq!(result, 3);
@@ -417,6 +631,7 @@ mod tests {
 
     #[test]
     fn n_nested_chain_runs() {
+        allow_test_names();
         // Deterministic proof: a chain of N runtimes composes a known sum.
         for &n in &[1usize, 2, 3, 5, 8] {
             let chain = nested_chain(n);
@@ -446,6 +661,7 @@ mod tests {
 
     #[test]
     fn n_nested_composition_across_levels() {
+        allow_test_names();
         let n = 6usize;
         let chain = nested_chain(n);
         // Each level runs a small task; aggregate on the outermost (first) runtime.
@@ -468,6 +684,7 @@ mod tests {
 
     #[test]
     fn deterministic_repeated_runs() {
+        allow_test_names();
         // Run the same nested composition many times; results must be identical.
         let mut results = Vec::new();
         for _ in 0..10 {
@@ -494,6 +711,7 @@ mod tests {
 
     #[test]
     fn timed_and_benchmark_utilities() {
+        allow_test_names();
         let v = timed("add", || 10 + 32);
         assert_eq!(v, 42);
 
@@ -510,6 +728,7 @@ mod tests {
 
     #[test]
     fn benchmark_async_utility() {
+        allow_test_names();
         let rt = global_rt();
         rt.block_on(benchmark_async("async_bench", 3, || async {
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
@@ -519,31 +738,88 @@ mod tests {
     #[cfg(not(feature = "unbounded"))]
     #[test]
     fn runtime_registry_under_cap_ok() {
-        assert_registry_has_capacity(MAX_RUNTIMES - 1, "under_cap");
+        allow_test_names();
+        assert!(check_capacity(MAX_RUNTIMES - 1).is_ok());
     }
 
     #[cfg(not(feature = "unbounded"))]
     #[test]
-    #[should_panic(expected = "registry is full")]
-    fn runtime_registry_cap_panics() {
-        assert_registry_has_capacity(MAX_RUNTIMES, "cap_test");
+    fn runtime_registry_cap_returns_error() {
+        allow_test_names();
+        assert_eq!(check_capacity(MAX_RUNTIMES), Err(NameError::RegistryFull));
+    }
+
+    #[cfg(feature = "explicit_name")]
+    #[test]
+    fn filter_allows_registered_exact_name() {
+        allow_test_names();
+        allow_name("filter_probe_exact").unwrap();
+        assert!(is_name_allowed("filter_probe_exact"));
+    }
+
+    #[cfg(feature = "explicit_name")]
+    #[test]
+    fn filter_rejects_unregistered_name() {
+        allow_test_names();
+        assert!(!is_name_allowed("filter_probe_unregistered_xyz"));
+        assert!(matches!(
+            try_named_runtime("filter_probe_unregistered_xyz"),
+            Err(NameError::NotAllowed(_))
+        ));
+    }
+
+    #[cfg(feature = "explicit_name")]
+    #[test]
+    fn filter_try_named_runtime_uses_allowed_name() {
+        allow_test_names();
+        allow_name("filter_probe_rt").unwrap();
+        let a = try_named_runtime("filter_probe_rt").unwrap();
+        let b = try_named_runtime("filter_probe_rt").unwrap();
+        assert!(std::ptr::eq(a, b));
+        assert!(disallow_name("filter_probe_rt"));
+        assert!(!is_name_allowed("filter_probe_rt"));
+    }
+
+    #[cfg(feature = "glob_support")]
+    #[test]
+    fn filter_glob_patterns_match_domains() {
+        allow_test_names();
+        allow_name("org.gnostr.*").unwrap();
+        allow_name("org.gnostr.*-debug").unwrap();
+        assert!(is_name_allowed("org.gnostr.wallet"));
+        assert!(is_name_allowed("org.gnostr.relay-debug"));
+        assert!(!is_name_allowed("com.other.thing"));
+        assert!(try_named_runtime("org.gnostr.wallet").is_ok());
+    }
+
+    #[cfg(feature = "glob_support")]
+    #[test]
+    fn filter_rejects_invalid_glob() {
+        allow_test_names();
+        assert!(matches!(
+            allow_name("org.[invalid"),
+            Err(NameError::InvalidPattern(_))
+        ));
     }
 
     // Negative tests: pass when the expected failure occurs.
     #[test]
     #[should_panic]
     fn negative_benchmark_zero_iterations() {
+        allow_test_names();
         benchmark("zero", 0, || {});
     }
 
     #[test]
     #[should_panic]
     fn negative_nested_leaf_zero() {
+        allow_test_names();
         let _ = nested_leaf(0);
     }
 
     #[test]
     fn negative_send_on_closed_channel() {
+        allow_test_names();
         let rt = global_rt();
         rt.block_on(async {
             let (tx, rx) = mpsc::channel::<i64>(1);
@@ -554,6 +830,7 @@ mod tests {
 
     #[test]
     fn negative_aborted_task_reports_cancelled() {
+        allow_test_names();
         let rt = global_rt();
         rt.block_on(async {
             let h = rt.spawn(async {
@@ -567,6 +844,7 @@ mod tests {
 
     #[test]
     fn available_threads_detected() {
+        allow_test_names();
         let n = available_threads();
         banner(&format!("[stress] available_threads={n}"));
         assert!(n >= 1);
@@ -576,6 +854,7 @@ mod tests {
     #[test]
     #[ignore]
     fn external_httpbin_json() {
+        allow_test_names();
         use std::io::{Read, Write};
         use std::net::TcpStream;
         use std::time::Duration;
@@ -601,6 +880,7 @@ mod tests {
     #[test]
     #[ignore]
     fn external_example_com() {
+        allow_test_names();
         use std::io::{Read, Write};
         use std::net::TcpStream;
         use std::time::Duration;
@@ -624,6 +904,7 @@ mod tests {
 
     #[test]
     fn stress_nested_runtimes() {
+        allow_test_names();
         let runtimes = stress_chain();
         let depth = runtimes.len();
         let tasks_per = 32usize;
