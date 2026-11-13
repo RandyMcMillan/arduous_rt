@@ -146,6 +146,23 @@ arduous_rt::allow_name("org.gnostr.*").unwrap();
 let rt = arduous_rt::named_runtime("org.gnostr.wallet"); // allowed by the glob
 ```
 
+## Comparison with alternatives
+
+| Capability | arduous_rt | trt | DIY `once_cell` + `Runtime` | tokio alone | async-global-executor |
+|---|---|---|---|---|---|
+| Process-global runtime | yes | yes (single) | yes (single) | manual | yes (smol/async-std, not tokio) |
+| Named registry (idempotent by name) | yes | no | no | no | no |
+| Hierarchical nesting (`child_runtime`, `nested_chain`) | yes | no | no | no | no |
+| Reentrancy-safe `run()` | yes | no | no | no | no |
+| Name allowlist + glob filters | yes (`explicit_name` / `glob_support`) | no | no | no | no |
+| Registry cap + `unbounded` escape | yes | no | no | no | no |
+
+[`trt`](https://crates.io/crates/trt) is the closest crate: a single process-global
+tokio runtime with spawn macros — it covers `global_rt()` and nothing else. The
+dominant alternative in practice is hand-rolling a `LazyLock<Runtime>` static in
+each project; `arduous_rt` productizes that pattern and adds the named registry,
+hierarchical nesting, reentrancy guard, and name filtering on top.
+
 ## Examples
 
 Run the bundled examples:
