@@ -2,6 +2,8 @@
 
 `arduous_rt` is a small, focused Rust crate that provides **process-global Tokio runtimes** that can be created, reused, nested, and composed. It is designed for applications and libraries that need a stable asynchronous execution backend without threading a runtime handle through every layer of the call stack.
 
+![](arduous_rt.png)
+
 ## Highlights
 
 - **One call, one runtime**: `global_rt()` returns a `&'static tokio::runtime::Runtime`.
