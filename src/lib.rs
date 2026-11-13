@@ -92,7 +92,9 @@ pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
     static RUNTIMES: LazyLock<Mutex<HashMap<String, &'static tokio::runtime::Runtime>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    let mut guard = RUNTIMES.lock().unwrap();
+    // Poison-safe: a panic while holding the lock must not take down all
+    // future lookups; the registry invariant survives a partial insert.
+    let mut guard = RUNTIMES.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(rt) = guard.get(name) {
         tracing::info!("named_runtime({name}) reused");
         return rt;
@@ -151,6 +153,9 @@ pub fn is_running_on(rt: &'static tokio::runtime::Runtime) -> bool {
 /// polled inline; otherwise it is spawned on `rt` and awaited to
 /// completion. This keeps `rt.block_on(run(rt, ..))` compositions from
 /// deadlocking, unlike nesting [`Runtime::block_on`], which does.
+///
+/// If the awaiting task is cancelled, the spawned inner task is detached
+/// and runs to completion on `rt`.
 ///
 /// [`Runtime::block_on`]: tokio::runtime::Runtime::block_on
 ///
@@ -272,11 +277,15 @@ pub fn stress_chain() -> Vec<&'static tokio::runtime::Runtime> {
 ///
 /// Spawns `tasks_per` tasks on each runtime and aggregates their results.
 pub async fn stress(runtimes: &[&'static tokio::runtime::Runtime], tasks_per: usize) -> i64 {
+    let total_tasks = runtimes
+        .len()
+        .checked_mul(tasks_per)
+        .expect("stress workload too large: runtimes.len() * tasks_per overflows usize");
     tracing::info!(
         "stress starting: runtimes={} tasks_per={} total={}",
         runtimes.len(),
         tasks_per,
-        runtimes.len() * tasks_per
+        total_tasks
     );
     let mut handles = Vec::with_capacity(runtimes.len() * tasks_per);
     for (ri, rt) in runtimes.iter().enumerate() {
