@@ -63,8 +63,6 @@ let producer = arduous_rt::named_runtime("producer");
 let consumer = arduous_rt::named_runtime("consumer");
 ```
 
-Aliases: `runtime(name)`, `global_rt_named(name)`.
-
 ### `child_runtime(parent, child) -> &'static Runtime`
 
 Creates (or reuses) a runtime whose name is `"{parent}/{child}"`.
@@ -106,10 +104,6 @@ let result = rt.block_on(async {
     arduous_rt::run(rt, async { 7 }).await
 });
 ```
-
-### `spawn_on(rt, fut) -> JoinHandle<R>`
-
-Spawns `fut` on `rt` and returns its join handle.
 
 ### `stress(runtimes, tasks_per).await -> i64`
 

@@ -106,16 +106,6 @@ pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
     leaked
 }
 
-/// Alias for [`named_runtime`].
-pub fn runtime(name: &str) -> &'static tokio::runtime::Runtime {
-    named_runtime(name)
-}
-
-/// Alias for [`named_runtime`].
-pub fn global_rt_named(name: &str) -> &'static tokio::runtime::Runtime {
-    named_runtime(name)
-}
-
 /// Create (or reuse) a child runtime scoped under a parent runtime name.
 pub fn child_runtime(parent: &str, child: &str) -> &'static tokio::runtime::Runtime {
     named_runtime(&format!("{parent}/{child}"))
@@ -187,17 +177,6 @@ where
         let handle = rt.spawn(fut);
         handle.await.expect("task panicked")
     }
-}
-
-/// Spawn a future on `rt`, returning its join handle.
-pub fn spawn_on<R>(
-    rt: &'static tokio::runtime::Runtime,
-    fut: impl Future<Output = R> + Send + 'static,
-) -> tokio::task::JoinHandle<R>
-where
-    R: Send + 'static,
-{
-    rt.spawn(fut)
 }
 
 /// Time a synchronous closure, logging elapsed milliseconds.
@@ -317,20 +296,10 @@ pub async fn stress(runtimes: &[&'static tokio::runtime::Runtime], tasks_per: us
     total
 }
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::sync::mpsc;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
 
     #[test]
     fn global_rt_works() {
@@ -491,7 +460,7 @@ mod tests {
 
     #[test]
     fn timed_and_benchmark_utilities() {
-        let v = timed("add", || add(10, 32));
+        let v = timed("add", || 10 + 32);
         assert_eq!(v, 42);
 
         let mut counter = 0u64;
@@ -501,7 +470,7 @@ mod tests {
         assert_eq!(counter, 5);
 
         let rt = global_rt();
-        let out = rt.block_on(timed_async("async_add", async { add(1, 2) }));
+        let out = rt.block_on(timed_async("async_add", async { 1 + 2 }));
         assert_eq!(out, 3);
     }
 
