@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The tokio requirement now states its true floor: `Handle::id` (used by
+  the reentrancy check) needs tokio 1.49, found by empirically
+  compiling against pinned versions (1.48 fails, 1.49 passes). The
+  manifest previously claimed any tokio 1.x.
+
 ## [0.8.1] - 2026-11-13
 
 ### Fixed
