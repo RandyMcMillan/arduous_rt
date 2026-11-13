@@ -28,6 +28,7 @@ jobs:
           cargo run --example nested_runtimes
           cargo run --example demo_backpressure
           cargo run --example demo_panic
+          cargo run --example stress_test
 
   msrv:
     runs-on: ubuntu-latest
