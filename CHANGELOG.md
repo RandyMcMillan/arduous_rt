@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counts are recomputed against pre-existing runtimes.
 - `policy-toml` feature: `policy_from_toml` parses and validates a TOML
   policy; `PolicyError::{Parse, Invalid}`.
+- `RuntimeConfig` + `allow_configured`: prescribe worker thread counts
+  and thread name prefixes per pattern.
+- `set_thread_quota` caps total worker threads per pattern
+  (`NameError::ThreadBudgetExceeded`); per-runtime worker counts feed
+  quota recomputation on policy swaps.
+- `audit_events`: ring buffer (256 entries) of governance decisions —
+  creations and every rejection kind (`AuditKind`).
 
 ## [0.7.0] - 2026-11-13
 

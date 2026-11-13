@@ -35,7 +35,11 @@
 //! events — see `deny_name`, `set_quota`, `list_runtimes`. Domain tokens
 //! (`DomainToken::acquire` + `named_runtime_in`) scope creation to a
 //! domain, and `Policy`/`set_policy` (or `policy_from_toml` with the
-//! `policy-toml` feature) swaps the whole policy atomically.
+//! `policy-toml` feature) swaps the whole policy atomically. Per-pattern
+//! `RuntimeConfig` (worker count, thread names via `allow_configured`)
+//! and thread budgets (`set_thread_quota`) shape the actual resource
+//! footprint, and `audit_events` exposes a ring buffer of the last 256
+//! governance decisions.
 //!
 //! # Nested chains
 //!
@@ -145,6 +149,16 @@ pub enum NameError {
         /// The token's domain.
         domain: String,
     },
+    /// The matched pattern's thread budget would be exceeded.
+    #[cfg(feature = "governance")]
+    ThreadBudgetExceeded {
+        /// The budget-limited pattern.
+        pattern: String,
+        /// The configured thread maximum.
+        max: usize,
+        /// The new runtime's worker count.
+        requested: usize,
+    },
     /// The registry is full; enable the `unbounded` feature to lift the cap.
     RegistryFull,
     /// The allowlist entry is not a valid glob pattern.
@@ -190,6 +204,16 @@ impl fmt::Display for NameError {
                 "runtime name {name:?} is outside the domain of this token ({domain:?})\n\
                  hint: acquire a token for the name's domain with arduous_rt::DomainToken::acquire, or rename"
             ),
+            #[cfg(feature = "governance")]
+            Self::ThreadBudgetExceeded {
+                pattern,
+                max,
+                requested,
+            } => write!(
+                f,
+                "pattern {pattern:?} would exceed its thread budget ({requested} requested, {max} allowed)\n\
+                 hint: raise the budget with arduous_rt::set_thread_quota, lower the worker count, or reuse an existing runtime"
+            ),
             Self::RegistryFull => write!(
                 f,
                 "runtime registry is full\n\
@@ -226,6 +250,16 @@ struct Registry {
     quotas: HashMap<String, usize>,
     #[cfg(feature = "governance")]
     counts: HashMap<String, usize>,
+    #[cfg(feature = "governance")]
+    configs: HashMap<String, RuntimeConfig>,
+    #[cfg(feature = "governance")]
+    thread_quotas: HashMap<String, usize>,
+    #[cfg(feature = "governance")]
+    thread_counts: HashMap<String, usize>,
+    /// Runtime name -> worker thread count, for budget accounting and
+    /// quota recomputation after `set_policy`.
+    #[cfg(feature = "governance")]
+    workers: HashMap<String, usize>,
 }
 
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
@@ -243,6 +277,14 @@ static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
         quotas: HashMap::new(),
         #[cfg(feature = "governance")]
         counts: HashMap::new(),
+        #[cfg(feature = "governance")]
+        configs: HashMap::new(),
+        #[cfg(feature = "governance")]
+        thread_quotas: HashMap::new(),
+        #[cfg(feature = "governance")]
+        thread_counts: HashMap::new(),
+        #[cfg(feature = "governance")]
+        workers: HashMap::new(),
     })
 });
 
@@ -296,6 +338,7 @@ fn find_match<'a>(patterns: &'a [(String, globset::GlobSet)], name: &str) -> Opt
 fn matched_pattern(reg: &Registry, name: &str) -> Result<String, NameError> {
     if let Some(by) = find_match(&reg.denied, name) {
         tracing::warn!(name, by, "governance: runtime creation denied");
+        audit(AuditKind::RejectedDenied, name, Some(by.to_string()));
         return Err(NameError::Denied {
             name: name.to_string(),
             by: by.to_string(),
@@ -307,6 +350,11 @@ fn matched_pattern(reg: &Registry, name: &str) -> Result<String, NameError> {
                 let current = reg.counts.get(pattern).copied().unwrap_or(0);
                 if current >= max {
                     tracing::warn!(name, pattern, max, "governance: pattern quota exceeded");
+                    audit(
+                        AuditKind::RejectedQuotaExceeded,
+                        name,
+                        Some(pattern.to_string()),
+                    );
                     return Err(NameError::QuotaExceeded {
                         pattern: pattern.to_string(),
                         max,
@@ -321,6 +369,7 @@ fn matched_pattern(reg: &Registry, name: &str) -> Result<String, NameError> {
                 registered = reg.allowed.len(),
                 "governance: name not allowed"
             );
+            audit(AuditKind::RejectedNotAllowed, name, None);
             Err(NameError::NotAllowed {
                 name: name.to_string(),
                 registered: reg.allowed.len(),
@@ -383,14 +432,26 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
         return Ok(rt);
     }
 
-    // Authorize under the lock. The governance pass also resolves the
-    // matched pattern, which drives quota accounting on insert.
+    // Authorize under the lock; the governance pass also resolves the
+    // matched pattern, which drives quota accounting, thread budgets, and
+    // the runtime's build config on the insert path.
     #[cfg(feature = "governance")]
-    matched_pattern(&guard, name)?;
+    let matched = matched_pattern(&guard, name)?;
     #[cfg(all(feature = "explicit_name", not(feature = "governance")))]
     check_allowed(&guard, name)?;
+    #[cfg(feature = "governance")]
+    {
+        let workers = guard
+            .configs
+            .get(&matched)
+            .map(RuntimeConfig::workers)
+            .unwrap_or_else(available_threads);
+        check_thread_budget(&guard, &matched, workers, name)?;
+    }
     #[cfg(not(feature = "unbounded"))]
     check_capacity(guard.runtimes.len())?;
+    #[cfg(feature = "governance")]
+    let config = guard.configs.get(&matched).cloned();
     drop(guard);
 
     // Create outside the lock: thread spawning can take tens of
@@ -398,6 +459,9 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
     // racer drops its fully constructed but unused runtime; a name
     // disallowed or capped between the two lock sections simply fails
     // here instead (see allow_name's documented semantics).
+    #[cfg(feature = "governance")]
+    let rt = build_runtime(name, config.as_ref());
+    #[cfg(not(feature = "governance"))]
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
@@ -409,6 +473,20 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
     }
     #[cfg(feature = "governance")]
     let matched = matched_pattern(&guard, name)?;
+    #[cfg(feature = "governance")]
+    let workers = {
+        let w = guard
+            .configs
+            .get(&matched)
+            .map(RuntimeConfig::workers)
+            .unwrap_or_else(available_threads);
+        if let Err(err) = check_thread_budget(&guard, &matched, w, name) {
+            drop(guard);
+            dispose_unused(rt);
+            return Err(err);
+        }
+        w
+    };
     #[cfg(not(feature = "unbounded"))]
     if let Err(err) = check_capacity(guard.runtimes.len()) {
         drop(guard);
@@ -424,6 +502,9 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
             *c += 1;
             *c
         };
+        *guard.thread_counts.entry(matched.clone()).or_insert(0) += workers;
+        guard.workers.insert(name.to_string(), workers);
+        audit(AuditKind::Created, name, Some(matched.clone()));
         tracing::info!(name, matched, count, "named_runtime created");
     }
     #[cfg(not(feature = "governance"))]
@@ -684,6 +765,11 @@ pub fn named_runtime_in(
     name: &str,
 ) -> Result<&'static tokio::runtime::Runtime, NameError> {
     if name != token.domain && !name.starts_with(&format!("{}/", token.domain)) {
+        audit(
+            AuditKind::RejectedOutsideDomain,
+            name,
+            Some(token.domain.clone()),
+        );
         return Err(NameError::OutsideDomain {
             name: name.to_string(),
             domain: token.domain.clone(),
@@ -763,6 +849,18 @@ pub fn set_policy(policy: Policy) -> Result<(), NameError> {
         }
     }
     guard.counts = counts;
+    let mut thread_counts: HashMap<String, usize> = HashMap::new();
+    for name in guard.runtimes.keys() {
+        if let Some(pattern) = find_match(&guard.allowed, name) {
+            let workers = guard
+                .workers
+                .get(name)
+                .copied()
+                .unwrap_or_else(available_threads);
+            *thread_counts.entry(pattern.to_string()).or_insert(0) += workers;
+        }
+    }
+    guard.thread_counts = thread_counts;
     Ok(())
 }
 
@@ -814,6 +912,179 @@ pub fn policy_from_toml(input: &str) -> Result<Policy, PolicyError> {
         validate_glob(&entry.pattern).map_err(PolicyError::Invalid)?;
     }
     Ok(policy)
+}
+
+/// How to build runtimes created through a pattern. Requires `governance`.
+#[cfg(feature = "governance")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeConfig {
+    /// Worker thread count; `None` uses tokio's default (available
+    /// parallelism).
+    pub worker_threads: Option<usize>,
+    /// Name prefix for the runtime's worker threads; defaults to the
+    /// runtime's registry name.
+    pub thread_name_prefix: Option<String>,
+}
+
+#[cfg(feature = "governance")]
+impl RuntimeConfig {
+    /// Builder-style setter for `worker_threads`.
+    pub fn with_worker_threads(mut self, n: usize) -> Self {
+        self.worker_threads = Some(n);
+        self
+    }
+
+    /// Builder-style setter for `thread_name_prefix`.
+    pub fn with_thread_name_prefix(mut self, prefix: &str) -> Self {
+        self.thread_name_prefix = Some(prefix.to_string());
+        self
+    }
+
+    fn workers(&self) -> usize {
+        self.worker_threads.unwrap_or_else(available_threads)
+    }
+}
+
+/// Allow a pattern and prescribe how runtimes created through it are
+/// built. The same pattern can be re-registered to replace its config.
+/// Requires the `governance` feature.
+///
+/// # Errors
+///
+/// Returns `NameError::InvalidPattern` when `pattern` is not a valid glob.
+#[cfg(feature = "governance")]
+pub fn allow_configured(pattern: &str, config: RuntimeConfig) -> Result<(), NameError> {
+    allow_name(pattern)?;
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    guard.configs.insert(pattern.to_string(), config);
+    Ok(())
+}
+
+/// Cap the total worker threads of runtimes created through `pattern`.
+/// Checked at creation time against the matched pattern. Requires the
+/// `governance` feature.
+///
+/// # Errors
+///
+/// Returns `NameError::InvalidPattern` when `pattern` is not a valid glob.
+#[cfg(feature = "governance")]
+pub fn set_thread_quota(pattern: &str, max_threads: usize) -> Result<(), NameError> {
+    validate_glob(pattern)?;
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    guard.thread_quotas.insert(pattern.to_string(), max_threads);
+    Ok(())
+}
+
+/// What happened on a governed creation attempt.
+#[cfg(feature = "governance")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditKind {
+    /// A runtime was created.
+    Created,
+    /// Rejected: the name matched no allow pattern.
+    RejectedNotAllowed,
+    /// Rejected: the name matched a deny pattern.
+    RejectedDenied,
+    /// Rejected: the matched pattern's runtime quota is full.
+    RejectedQuotaExceeded,
+    /// Rejected: the matched pattern's thread budget is full.
+    RejectedThreadBudget,
+    /// Rejected: the name escaped the presented token's domain.
+    RejectedOutsideDomain,
+}
+
+/// One entry of the governance audit log. Requires `governance`.
+#[cfg(feature = "governance")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditEvent {
+    /// When the event was recorded.
+    pub when: std::time::SystemTime,
+    /// What happened.
+    pub kind: AuditKind,
+    /// The runtime name involved.
+    pub name: String,
+    /// The pattern that authorized or rejected the name, if any.
+    pub pattern: Option<String>,
+}
+
+#[cfg(feature = "governance")]
+const AUDIT_CAP: usize = 256;
+
+#[cfg(feature = "governance")]
+static AUDIT: LazyLock<Mutex<std::collections::VecDeque<AuditEvent>>> =
+    LazyLock::new(|| Mutex::new(std::collections::VecDeque::new()));
+
+#[cfg(feature = "governance")]
+fn audit(kind: AuditKind, name: &str, pattern: Option<String>) {
+    let mut log = AUDIT.lock().unwrap_or_else(|e| e.into_inner());
+    if log.len() >= AUDIT_CAP {
+        log.pop_front();
+    }
+    log.push_back(AuditEvent {
+        when: std::time::SystemTime::now(),
+        kind,
+        name: name.to_string(),
+        pattern,
+    });
+}
+
+/// The governance audit log, oldest first, capped at 256 events. Requires
+/// the `governance` feature.
+#[cfg(feature = "governance")]
+pub fn audit_events() -> Vec<AuditEvent> {
+    AUDIT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .cloned()
+        .collect()
+}
+
+/// Build a runtime per the matched pattern's config, falling back to the
+/// tokio default build.
+#[cfg(feature = "governance")]
+fn build_runtime(name: &str, config: Option<&RuntimeConfig>) -> tokio::runtime::Runtime {
+    let Some(config) = config else {
+        return tokio::runtime::Runtime::new().unwrap();
+    };
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if let Some(n) = config.worker_threads {
+        builder.worker_threads(n);
+    }
+    let prefix = config
+        .thread_name_prefix
+        .clone()
+        .unwrap_or_else(|| name.to_string());
+    builder.thread_name(prefix);
+    builder.build().unwrap()
+}
+
+/// Enforce the matched pattern's thread budget. The caller disposes the
+/// already-created runtime on error.
+#[cfg(feature = "governance")]
+fn check_thread_budget(
+    reg: &Registry,
+    matched: &str,
+    workers: usize,
+    name: &str,
+) -> Result<(), NameError> {
+    if let Some(&max) = reg.thread_quotas.get(matched) {
+        let current = reg.thread_counts.get(matched).copied().unwrap_or(0);
+        if current + workers > max {
+            audit(
+                AuditKind::RejectedThreadBudget,
+                name,
+                Some(matched.to_string()),
+            );
+            return Err(NameError::ThreadBudgetExceeded {
+                pattern: matched.to_string(),
+                max,
+                requested: workers,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Create (or reuse) a child runtime scoped under a parent runtime name.
@@ -1410,6 +1681,69 @@ mod tests {
             DomainToken::acquire("nowhere.atall"),
             Err(NameError::NotAllowed { .. })
         ));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_configured_runtime_uses_worker_and_name_prefix() {
+        allow_test_names();
+        allow_configured(
+            "cfg_demo.*",
+            RuntimeConfig::default()
+                .with_worker_threads(1)
+                .with_thread_name_prefix("cfg_demo_worker"),
+        )
+        .unwrap();
+        let rt = try_named_runtime("cfg_demo.pool").unwrap();
+        // The root future runs on the calling thread under block_on; a
+        // spawned task runs on a worker, which is where the prefix shows.
+        let thread_name = rt.block_on(async {
+            tokio::spawn(async { std::thread::current().name().unwrap().to_string() })
+                .await
+                .unwrap()
+        });
+        assert!(
+            thread_name.starts_with("cfg_demo_worker"),
+            "worker thread should carry the configured prefix, got {thread_name:?}"
+        );
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_thread_budget_exceeded() {
+        allow_test_names();
+        allow_configured("tb_demo.*", RuntimeConfig::default().with_worker_threads(1)).unwrap();
+        set_thread_quota("tb_demo.*", 2).unwrap();
+        assert!(try_named_runtime("tb_demo.a").is_ok());
+        assert!(try_named_runtime("tb_demo.b").is_ok());
+        assert!(matches!(
+            try_named_runtime("tb_demo.c"),
+            Err(NameError::ThreadBudgetExceeded { max: 2, .. })
+        ));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_audit_log_records_created_and_rejected() {
+        allow_test_names();
+        allow_name("aud_demo.*").unwrap();
+        deny_name("aud_demo.blocked.*").unwrap();
+        try_named_runtime("aud_demo.ok").unwrap();
+        assert!(matches!(
+            try_named_runtime("aud_demo.blocked.x"),
+            Err(NameError::Denied { .. })
+        ));
+        let events = audit_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == AuditKind::Created && e.name == "aud_demo.ok")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == AuditKind::RejectedDenied && e.name == "aud_demo.blocked.x")
+        );
     }
 
     // Negative tests: pass when the expected failure occurs.
