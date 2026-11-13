@@ -1,6 +1,6 @@
 use arduous_rt::{banner, named_runtime};
 use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 fn main() {
     #[cfg(feature = "console")]
