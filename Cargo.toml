@@ -3,6 +3,7 @@ name = "arduous_rt"
 version = "0.6.0"
 edition = "2024"
 readme = "README.md"
+exclude = [".cargo/config.toml"]
 description = "Process-global named Tokio runtimes with nesting, reentrancy-safe execution, and stress-testing helpers"
 license = "MIT"
 repository = "https://github.com/RandyMcMillan/arduous_rt"
