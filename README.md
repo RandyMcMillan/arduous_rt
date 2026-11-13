@@ -189,7 +189,7 @@ make clean          # cargo clean
 ## Design notes
 
 - Runtimes are **leaked** (`Box::leak`) so they live for `'static`. This is intentional: a global runtime must outlive all users. The cost is that runtimes are never dropped.
-- `named_runtime` uses a process-global `Mutex<HashMap>` guarded by `once_cell::Lazy`.
+- `named_runtime` uses a process-global `Mutex<HashMap>` guarded by a `std::sync::LazyLock`.
 - `run()` detects reentrancy via `Handle::id()` comparison, avoiding `block_on` on the same runtime.
 - External tests are `#[ignore]`d so the default suite stays deterministic and offline-friendly.
 

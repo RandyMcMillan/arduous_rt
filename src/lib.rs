@@ -43,10 +43,9 @@
 //! assert!(std::ptr::eq(rt, arduous_rt::named_runtime("example")));
 //! ```
 
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
 #[doc(hidden)]
@@ -90,8 +89,8 @@ pub fn global_rt() -> &'static tokio::runtime::Runtime {
 /// assert!(std::ptr::eq(a, b));
 /// ```
 pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
-    static RUNTIMES: Lazy<Mutex<HashMap<String, &'static tokio::runtime::Runtime>>> =
-        Lazy::new(|| Mutex::new(HashMap::new()));
+    static RUNTIMES: LazyLock<Mutex<HashMap<String, &'static tokio::runtime::Runtime>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
 
     let mut guard = RUNTIMES.lock().unwrap();
     if let Some(rt) = guard.get(name) {
