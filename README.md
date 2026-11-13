@@ -12,7 +12,7 @@
 - **Cooperation**: runtimes exchange data over Tokio channels, barriers, shared state, etc.
 - **Reentrancy safety**: `run(rt, fut)` executes a future on `rt`, awaiting it directly when already running on `rt` (no deadlock, no panic).
 - **CPU-aware stress testing**: `available_threads()` and `stress_chain()` size workloads to the machine.
-- **Built-in observability**: always-on `trace!` logging, `timed`/`timed_async` helpers, and `benchmark`/`benchmark_async`.
+- **Built-in observability**: always-on `arduous_trace!` logging, `timed`/`timed_async` helpers, and `benchmark`/`benchmark_async`.
 - **Proof-oriented tests**: deterministic aggregation proofs across N nested runtimes, repeated-run determinism, and external network smoke tests.
 
 ## Installation
@@ -117,12 +117,12 @@ Spawns `tasks_per` tasks on each runtime in `runtimes` and aggregates their resu
 
 ## Observability
 
-### `trace!` macro
+### `arduous_trace!` macro
 
 Always emitted, regardless of any configured log level:
 
 ```rust
-arduous_rt::trace!("starting worker {}", id);
+arduous_rt::arduous_trace!("starting worker {}", id);
 ```
 
 ### `banner(message)`

@@ -1,10 +1,10 @@
-use arduous_rt::trace;
+use arduous_rt::arduous_trace;
 
 fn main() {
-    trace!("trace demo starting");
+    arduous_trace!("trace demo starting");
     let rt = arduous_rt::global_rt();
     rt.block_on(async {
-        trace!("inside runtime");
+        arduous_trace!("inside runtime");
     });
-    trace!("trace demo done");
+    arduous_trace!("trace demo done");
 }

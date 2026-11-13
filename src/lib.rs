@@ -6,7 +6,7 @@ use std::time::Instant;
 
 /// A trace log that is always emitted, regardless of configured log level.
 #[macro_export]
-macro_rules! trace {
+macro_rules! arduous_trace {
     ($($arg:tt)*) => {
         println!("============================================================");
         println!(" [trace] {}", format!($($arg)*));
@@ -16,7 +16,7 @@ macro_rules! trace {
 
 //global_rt
 pub fn global_rt() -> &'static tokio::runtime::Runtime {
-    trace!("global_rt() invoked");
+    arduous_trace!("global_rt() invoked");
     named_runtime("global")
 }
 
@@ -27,14 +27,14 @@ pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
 
     let mut guard = RUNTIMES.lock().unwrap();
     if let Some(rt) = guard.get(name) {
-        trace!("named_runtime({name}) reused");
+        arduous_trace!("named_runtime({name}) reused");
         return rt;
     }
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     let leaked: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
     guard.insert(name.to_string(), leaked);
-    trace!("named_runtime({name}) created");
+    arduous_trace!("named_runtime({name}) created");
     leaked
 }
 
@@ -204,7 +204,7 @@ pub fn stress_chain() -> Vec<&'static tokio::runtime::Runtime> {
 ///
 /// Spawns `tasks_per` tasks on each runtime and aggregates their results.
 pub async fn stress(runtimes: &[&'static tokio::runtime::Runtime], tasks_per: usize) -> i64 {
-    trace!(
+    arduous_trace!(
         "stress starting: runtimes={} tasks_per={} total={}",
         runtimes.len(),
         tasks_per,
@@ -223,7 +223,7 @@ pub async fn stress(runtimes: &[&'static tokio::runtime::Runtime], tasks_per: us
     for handle in handles {
         total += handle.await.expect("stress task panicked");
     }
-    trace!("stress finished: result={total}");
+    arduous_trace!("stress finished: result={total}");
     total
 }
 
