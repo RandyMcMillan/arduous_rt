@@ -621,9 +621,8 @@ fn arduous_nested_timeouts() {
     let rt = named_runtime("arduous_nested_timeouts");
     let result = rt.block_on(async {
         // Outer timeout wraps an inner timeout that fires first.
-        
+
         timeout(Duration::from_millis(200), async {
-            
             timeout(Duration::from_millis(50), async {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 1i64
@@ -873,11 +872,9 @@ fn arduous_deadline_cascade() {
     let rt = named_runtime("arduous_deadline_cascade");
     let result = rt.block_on(async {
         // Three nested timeouts; innermost completes in time, middle allows, outer allows.
-        
+
         timeout(Duration::from_millis(200), async {
-            
             timeout(Duration::from_millis(150), async {
-                
                 timeout(Duration::from_millis(100), async {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     7i64
@@ -1057,9 +1054,10 @@ fn arduous_nested_task_cancellation() {
         let mut cancelled = 0usize;
         for h in handles {
             if let Err(e) = h.await
-                && e.is_cancelled() {
-                    cancelled += 1;
-                }
+                && e.is_cancelled()
+            {
+                cancelled += 1;
+            }
         }
         cancelled
     });
