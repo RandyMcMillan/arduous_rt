@@ -227,6 +227,7 @@ tokio-console
 ## Safety and limitations
 
 - Creating many runtimes is expensive; `stress_chain()` caps depth at 16.
+- The registry holds at most 256 named runtimes by default — the 257th distinct name panics. Enable the `unbounded` feature to remove the cap. Never derive runtime names from untrusted input.
 - `Runtime::block_on` must not be called from within an async context on the *same* runtime. Use `run()` or `spawn()` instead.
 - The crate does not shut down runtimes; they persist until process exit.
 

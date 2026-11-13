@@ -12,6 +12,7 @@ rust-version = "1.85"
 
 [features]
 console = ["dep:console-subscriber"]
+unbounded = []
 
 [dependencies]
 console-subscriber = { version = "0.4", optional = true }

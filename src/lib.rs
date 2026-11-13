@@ -9,7 +9,9 @@
 //! Runtimes are intentionally leaked: they are never shut down and their
 //! worker threads live until the process exits. Distinct names grow
 //! threads and memory without bound, so reuse names rather than minting
-//! new ones.
+//! new ones. By default the registry holds at most 256 runtimes and
+//! panics on the 257th distinct name; enable the `unbounded` feature to
+//! remove the cap. Never derive names from untrusted input.
 //!
 //! # Nested chains
 //!
@@ -76,10 +78,31 @@ pub fn global_rt() -> &'static tokio::runtime::Runtime {
     named_runtime("global")
 }
 
+/// Maximum number of distinct named runtimes kept in the registry.
+/// Reached only when `unbounded` is disabled.
+#[cfg(not(feature = "unbounded"))]
+const MAX_RUNTIMES: usize = 256;
+
+/// Panics if the registry is at capacity.
+#[cfg(not(feature = "unbounded"))]
+fn assert_registry_has_capacity(len: usize, name: &str) {
+    if len >= MAX_RUNTIMES {
+        panic!(
+            "named_runtime(\"{name}\"): registry is full ({MAX_RUNTIMES} runtimes); \
+             reuse names or enable the 'unbounded' feature"
+        );
+    }
+}
+
 /// Obtain (or lazily create) a dedicated tokio runtime identified by `name`.
 ///
 /// Runtimes are never shut down; the same `&'static` runtime is returned
 /// for a given name until the process exits.
+///
+/// # Panics
+///
+/// Panics if the registry is full. By default at most 256 distinct runtimes
+/// are kept; enable the `unbounded` feature to remove the cap.
 ///
 /// # Examples
 ///
@@ -99,6 +122,9 @@ pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
         tracing::info!("named_runtime({name}) reused");
         return rt;
     }
+
+    #[cfg(not(feature = "unbounded"))]
+    assert_registry_has_capacity(guard.len(), name);
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     let leaked: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
@@ -488,6 +514,19 @@ mod tests {
         rt.block_on(benchmark_async("async_bench", 3, || async {
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         }));
+    }
+
+    #[cfg(not(feature = "unbounded"))]
+    #[test]
+    fn runtime_registry_under_cap_ok() {
+        assert_registry_has_capacity(MAX_RUNTIMES - 1, "under_cap");
+    }
+
+    #[cfg(not(feature = "unbounded"))]
+    #[test]
+    #[should_panic(expected = "registry is full")]
+    fn runtime_registry_cap_panics() {
+        assert_registry_has_capacity(MAX_RUNTIMES, "cap_test");
     }
 
     // Negative tests: pass when the expected failure occurs.
