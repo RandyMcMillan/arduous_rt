@@ -163,6 +163,11 @@ let rt = arduous_rt::named_runtime("org.gnostr.wallet"); // allowed by the glob
 | Hierarchical nesting (`child_runtime`, `nested_chain`) | yes | no | no | no | no |
 | Reentrancy-safe `run()` | yes | no | no | no | no |
 | Name allowlist + glob filters | yes (`explicit_name` / `glob_support`) | no | no | no | no |
+| Deny rules + per-pattern quotas | yes (`governance`) | no | no | no | no |
+| Domain capabilities + delegation (tokens) | yes (`governance`) | no | no | no | no |
+| Declarative policy, atomic hot reload | yes (`policy-toml`) | no | no | no | no |
+| Runtime configs + thread budgets | yes (`governance`) | no | no | no | no |
+| Audit log of governance decisions | yes (`governance`) | no | no | no | no |
 | Registry cap + `unbounded` escape | yes | no | no | no | no |
 | Zero unsafe (compile-time enforced) | yes (`#![forbid(unsafe_code)]`) | — | — (your code) | no (internals) | no (internals) |
 
@@ -170,7 +175,11 @@ let rt = arduous_rt::named_runtime("org.gnostr.wallet"); // allowed by the glob
 tokio runtime with spawn macros — it covers `global_rt()` and nothing else. The
 dominant alternative in practice is hand-rolling a `LazyLock<Runtime>` static in
 each project; `arduous_rt` productizes that pattern and adds the named registry,
-hierarchical nesting, reentrancy guard, and name filtering on top.
+hierarchical nesting, reentrancy guard, and name filtering on top. The governance
+layer (deny/quotas, domain tokens, TOML policy, resource shaping, audit) has no
+equivalent in any of these columns — and is the part that is genuinely hard to
+DIY correctly: precedence, quota counting across hot policy swaps, and thread
+budgeting carry subtle semantics that are easy to get subtly wrong.
 
 ## Troubleshooting
 
