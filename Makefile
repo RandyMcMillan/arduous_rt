@@ -16,7 +16,7 @@ fmt: ## Format code
 	cargo fmt
 
 clippy: ## Run clippy
-	cargo clippy -- -D warnings
+	cargo clippy --all-targets --all-features -- -D warnings
 
 doc: ## Build documentation
 	cargo doc --no-deps
