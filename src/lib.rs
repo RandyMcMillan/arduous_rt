@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Named, lazily-created tokio runtimes that compose.
 //!
 //! This crate keeps a process-wide registry of tokio runtimes, each
