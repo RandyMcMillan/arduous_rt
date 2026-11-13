@@ -21,14 +21,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-arduous_rt = { path = "../arduous_rt" }
+arduous_rt = "0.6"
 ```
 
-Or, once published:
+For local development, use a path dependency instead:
 
 ```toml
 [dependencies]
-arduous_rt = "0.6"
+arduous_rt = { path = "../arduous_rt" }
 ```
 
 ## Quick start
