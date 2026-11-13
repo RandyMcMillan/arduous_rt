@@ -271,6 +271,7 @@ where
 
 /// Print an obvious banner around `message`.
 pub fn banner(message: &str) {
+    println!();
     println!("============================================================");
     println!(" {message}");
     println!("============================================================");
