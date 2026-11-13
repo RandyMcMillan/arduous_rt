@@ -10,6 +10,9 @@ keywords = ["tokio", "runtime", "async", "concurrency"]
 categories = ["asynchronous", "concurrency"]
 rust-version = "1.85"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 console = ["dep:console-subscriber"]
 unbounded = []
