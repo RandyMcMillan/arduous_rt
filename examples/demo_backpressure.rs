@@ -1,3 +1,12 @@
+//! Demonstrates channel backpressure: a fast producer fills a bounded
+//! (capacity 2) mpsc channel and blocks until the slow consumer catches up.
+//!
+//! Run:
+//! cargo run --example demo_backpressure
+//!
+//! Expected: completes after ~2s; "Sending item N..." and "Received item N"
+//! lines interleave once the buffer fills.
+
 use arduous_rt::{banner, named_runtime};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};

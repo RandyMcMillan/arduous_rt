@@ -1,3 +1,11 @@
+//! Demonstrates `arduous_trace!` events flowing through a `tracing` subscriber.
+//!
+//! Run:
+//! cargo run --example trace_demo
+//!
+//! Expected: three `INFO` events on stderr — before, inside, and after the
+//! global runtime — plus the registry lifecycle events from the library.
+
 use arduous_rt::arduous_trace;
 
 fn main() {

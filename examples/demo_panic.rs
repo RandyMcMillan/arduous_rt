@@ -1,3 +1,11 @@
+//! Demonstrates panic propagation: a spawned task panics, and the awaiting
+//! code inspects the `JoinError` instead of crashing the process.
+//!
+//! Run:
+//! cargo run --example demo_panic
+//!
+//! Expected: completes; prints "Caught expected task panic: ...".
+
 use arduous_rt::{banner, named_runtime};
 use std::time::Duration;
 

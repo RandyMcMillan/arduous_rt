@@ -1,3 +1,12 @@
+//! Stress workload: spawns 64 tasks per runtime across a chain sized to the
+//! machine's parallelism, then aggregates a deterministic checksum.
+//!
+//! Run:
+//! cargo run --example stress_test
+//!
+//! Expected: completes with "ALL STRESS CHECKS PASSED" and a result/equal
+//! proof banner.
+
 use arduous_rt::{banner, stress, stress_chain};
 
 #[tokio::main]

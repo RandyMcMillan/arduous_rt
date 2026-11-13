@@ -1,3 +1,13 @@
+//! Deterministic proofs across nested runtime chains: for each depth n in
+//! 1,2,3,5,8, composes tasks on every level of a `nested_chain` and checks
+//! the triangular sum, then repeats a 4-deep composition 10x to prove
+//! determinism.
+//!
+//! Run:
+//! cargo run --example nested_proofs
+//!
+//! Expected: completes; one proof banner per depth plus "ALL PROOFS VERIFIED".
+
 use arduous_rt::{nested_chain, run};
 
 fn main() {

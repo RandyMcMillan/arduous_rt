@@ -1,5 +1,11 @@
-// Intentionally demonstrates a deadlock: block_on inside an async task on the same runtime.
-// Run with a timeout, e.g. `timeout 5s cargo run --example demo_deadlock`.
+//! Intentionally demonstrates a deadlock: `block_on` called inside an async
+//! task running on the same runtime blocks the worker thread forever.
+//!
+//! Run under a timeout:
+//! timeout 5s cargo run --example demo_deadlock
+//!
+//! Expected: hangs until the timeout kills it. The fix is `arduous_rt::run`
+//! (inline-polls when already on the target runtime) or `spawn`.
 
 use arduous_rt::{banner, named_runtime};
 

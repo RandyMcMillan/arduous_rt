@@ -1,5 +1,13 @@
-// Intentionally demonstrates task starvation: a CPU-bound loop never yields.
-// Run with a timeout, e.g. `timeout 5s cargo run --example demo_starvation`.
+//! Intentionally demonstrates task starvation: a CPU-bound loop that never
+//! yields occupies its worker thread, so other tasks on the runtime may
+//! never run.
+//!
+//! Run under a timeout:
+//! timeout 5s cargo run --example demo_starvation
+//!
+//! Expected: the "Victim task executed" line may never print; the process
+//! spins until the timeout kills it. The fix is `tokio::task::yield_now()`
+//! (or `spawn_blocking`) inside the loop.
 
 use arduous_rt::{banner, named_runtime};
 use tokio::time::Duration;

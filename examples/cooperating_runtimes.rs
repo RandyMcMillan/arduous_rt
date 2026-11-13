@@ -1,3 +1,12 @@
+//! Two named runtimes ("producer", "consumer") exchanging messages over a
+//! bounded mpsc channel, with the consumer driving the receive loop.
+//!
+//! Run:
+//! cargo run --example cooperating_runtimes
+//!
+//! Expected: completes; prints the global runtime pointer and the three
+//! received messages.
+
 use arduous_rt::{global_rt, named_runtime};
 use tokio::sync::mpsc;
 
