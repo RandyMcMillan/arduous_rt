@@ -97,6 +97,9 @@ fn allow_test_names() {
             for i in 0..8 {
                 names.push(format!("arduous_concurrent_{i}"));
             }
+            for i in 0..10 {
+                names.push(format!("arduous_idempotent_r{i}"));
+            }
             // nested_chain builds cumulative paths: level_0, level_0/level_1, ...
             // arduous_deep_nesting reaches depth 32.
             let mut path = String::new();
@@ -1039,24 +1042,36 @@ fn arduous_deadline_cascade() {
 #[test]
 fn arduous_idempotent_named_runtime() {
     allow_test_names();
-    let name = "arduous_idempotent_shared";
     let threads = available_threads().clamp(2, 8);
-    let mut handles = Vec::new();
-    for _ in 0..threads {
-        handles.push(std::thread::spawn(move || {
-            arduous_rt::named_runtime(name) as *const _ as usize
-        }));
+    // A fresh name per round re-exercises the create-outside-the-lock
+    // race; the shared name below hammers the lookup fast path.
+    let rounds = 10;
+    for round in 0..rounds {
+        let name = format!("arduous_idempotent_r{round}");
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let name = name.clone();
+                std::thread::spawn(move || arduous_rt::named_runtime(&name) as *const _ as usize)
+            })
+            .collect();
+        let ptrs: Vec<usize> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let first = ptrs[0];
+        assert!(
+            ptrs.iter().all(|&p| p == first),
+            "round {round}: {threads} racing creators received divergent runtimes"
+        );
     }
-    let mut ptrs = Vec::new();
-    for h in handles {
-        ptrs.push(h.join().unwrap());
+    let lookups = threads * rounds;
+    let shared_ptr = arduous_rt::named_runtime("arduous_idempotent_shared") as *const _ as usize;
+    for _ in 0..lookups {
+        assert_eq!(
+            arduous_rt::named_runtime("arduous_idempotent_shared") as *const _ as usize,
+            shared_ptr
+        );
     }
-    let first = ptrs[0];
     banner(&format!(
-        "[arduous idempotent] threads={threads} all_same={}",
-        ptrs.iter().all(|&p| p == first)
+        "[arduous idempotent] threads={threads} rounds={rounds}: all racing creators returned one runtime; {lookups} stable lookups"
     ));
-    assert!(ptrs.iter().all(|&p| p == first));
 }
 
 #[test]
