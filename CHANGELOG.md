@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-13
+
+### Changed
+
+- MSRV raised to 1.88: let-chains in the integration tests and
+  hdrhistogram 7.6.0 (via the `console` feature's console-subscriber)
+  both require it.
+- CI: the check job runs on Linux, macOS, and Windows; the MSRV job runs
+  the full three-feature-combination test matrix on the MSRV toolchain.
+
+## [0.6.2] - 2026-11-13
+
+### Added
+
+- `SECURITY.md` (reporting policy) and `CONTRIBUTING.md` (gates,
+  test-seeding rules, pointers to AGENTS.md and the deferred-work stubs).
+- README: zero-unsafe comparison row, concurrency-identity test
+  description, deferred loom/RwLock stubs with TODOs
+  (`examples/deferred_*.rs`).
+
+### Changed
+
+- `arduous_idempotent_named_runtime` strengthened: 10 fresh-name creator
+  rounds asserting a single winning runtime, plus a pointer-stable lookup
+  hammer.
+
+## [0.6.1] - 2026-11-13
+
+### Changed
+
+- Runtimes are created outside the registry lock; racing losers are
+  disposed on a blocking thread (dropping a runtime inside an async
+  context panics).
+- `#![forbid(unsafe_code)]`.
+- README installation leads with the crates.io version; `stress_test`
+  added to the CI example smoke run.
+
 ## [0.6.0] - 2026-11-13
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "arduous_rt"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2024"
 readme = "README.md"
 exclude = [".cargo/config.toml"]
@@ -9,7 +9,7 @@ license = "MIT"
 repository = "https://github.com/RandyMcMillan/arduous_rt"
 keywords = ["tokio", "runtime", "async", "concurrency"]
 categories = ["asynchronous", "concurrency"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [package.metadata.docs.rs]
 all-features = true
