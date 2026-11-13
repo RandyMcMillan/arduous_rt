@@ -141,6 +141,8 @@ Runs `f` repeatedly and logs min/avg/max timings.
 - `explicit_name` — names must be pre-authorized with `allow_name`; an empty allowlist rejects every new name.
 - `glob_support` — implies `explicit_name`; allowlist entries may be glob patterns such as `org.gnostr.*` or `org.gnostr.*-debug`.
 
+Requires the `glob_support` feature:
+
 ```rust
 arduous_rt::allow_name("org.gnostr.*").unwrap();
 let rt = arduous_rt::named_runtime("org.gnostr.wallet"); // allowed by the glob
@@ -162,6 +164,16 @@ tokio runtime with spawn macros — it covers `global_rt()` and nothing else. Th
 dominant alternative in practice is hand-rolling a `LazyLock<Runtime>` static in
 each project; `arduous_rt` productizes that pattern and adds the named registry,
 hierarchical nesting, reentrancy guard, and name filtering on top.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `runtime name "x" is not allowed: the explicit_name filter is active but the allowlist is empty` | `explicit_name` is enabled (possibly by a dependency — cargo features unify) and nothing called `allow_name` yet | Call `arduous_rt::allow_name("x")` during startup, or build without `explicit_name` |
+| `runtime name "x" is not allowed: it matches none of the N registered patterns` | The name is not in the allowlist | `allow_name("x")`, or register a wider pattern such as `org.gnostr.*` with `glob_support` |
+| `runtime registry is full` | More than 256 distinct runtime names | Reuse names, or enable the `unbounded` feature |
+| Hang when calling `block_on` from inside a task | `Runtime::block_on` on the same runtime deadlocks (see `demo_deadlock`) | Use `arduous_rt::run(rt, fut)` or `rt.spawn(fut)` instead |
+| `fail N` / `boom N` lines while running tests | Intentional panics from the negative tests, framed by the `PanicFrame` hook | Expected output — the suite still passes |
 
 ## Examples
 
