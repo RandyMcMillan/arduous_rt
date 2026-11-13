@@ -236,7 +236,7 @@ make clean          # cargo clean
 - `run()` detects reentrancy via `Handle::id()` comparison, avoiding `block_on` on the same runtime.
 - External tests are `#[ignore]`d so the default suite stays deterministic and offline-friendly.
 - `#![forbid(unsafe_code)]`: no `unsafe` in the crate, enforced at compile time.
-- Deferred deliberately: loom model-checking of the registry race and an `RwLock` lookup path. The protocol is two short critical sections under one lock, covered by the concurrency-identity tests above; revisit if the registry gains more state or a profile shows lock contention.
+- Deferred deliberately: loom model-checking of the registry race and an `RwLock` lookup path. The protocol is two short critical sections under one lock, covered by the concurrency-identity tests above; revisit if the registry gains more state or a profile shows lock contention. Stub examples with implementation TODOs: `examples/deferred_loom_registry.rs`, `examples/deferred_rwlock_registry.rs`.
 
 ## Demo: concurrency failure modes
 

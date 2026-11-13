@@ -89,3 +89,7 @@ timeout 5s cargo run --example demo_starvation
   tests framed by the `PanicFrame` hook — expected output, not failures.
 - External network tests are `#[ignore]`d by default; the `Rust` workflow
   runs them with `--include-ignored`.
+- Deferred work has stub examples with TODO notes:
+  `examples/deferred_loom_registry.rs` (loom model of the registry race)
+  and `examples/deferred_rwlock_registry.rs` (RwLock lookup path). Read
+  them before re-litigating those decisions.
