@@ -193,13 +193,85 @@ fn compile_allowed(allowed: &HashSet<String>) -> globset::GlobSet {
         .expect("allowlist patterns are validated at registration")
 }
 
-fn create_runtime(
-    name: &str,
-    guard: &mut Registry,
-) -> Result<&'static tokio::runtime::Runtime, NameError> {
+/// Run the allowlist check for `name` against the registry.
+#[cfg(feature = "explicit_name")]
+fn check_allowed(reg: &Registry, name: &str) -> Result<(), NameError> {
+    if reg.allowed.is_empty() {
+        return Err(NameError::NotAllowed {
+            name: name.to_string(),
+            registered: 0,
+        });
+    }
+    if !reg.allowed.contains(name) {
+        #[cfg(feature = "glob_support")]
+        if reg.compiled.is_match(name) {
+            return Ok(());
+        }
+        return Err(NameError::NotAllowed {
+            name: name.to_string(),
+            registered: reg.allowed.len(),
+        });
+    }
+    Ok(())
+}
+
+/// Fallible variant of [`named_runtime`]: rejected names and a full
+/// registry surface as `Err` instead of a panic.
+///
+/// # Errors
+///
+/// With the `explicit_name` feature enabled, returns
+/// `NameError::NotAllowed` when the allowlist does not authorize `name`.
+/// Returns `NameError::RegistryFull` when the registry is at capacity
+/// (see the `unbounded` feature).
+/// Drops a runtime that lost an insert race (or hit the cap after
+/// creation). Dropping a runtime blocks on its worker threads, which
+/// panics inside an async context, so hand it to a blocking thread
+/// whenever a runtime context is available.
+fn dispose_unused(rt: tokio::runtime::Runtime) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn_blocking(move || drop(rt));
+        }
+        Err(_) => drop(rt),
+    }
+}
+
+pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime, NameError> {
+    // Poison-safe: a panic while holding the lock must not take down all
+    // future lookups; the registry invariant survives a partial insert.
+    let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(rt) = guard.runtimes.get(name) {
+        tracing::info!("named_runtime({name}) reused");
+        return Ok(rt);
+    }
+
+    #[cfg(feature = "explicit_name")]
+    check_allowed(&guard, name)?;
     #[cfg(not(feature = "unbounded"))]
     check_capacity(guard.runtimes.len())?;
+    drop(guard);
+
+    // Create outside the lock: thread spawning can take tens of
+    // milliseconds and must not block other threads' lookups. A losing
+    // racer drops its fully constructed but unused runtime; a name
+    // disallowed or capped between the two lock sections simply fails
+    // here instead (see allow_name's documented semantics).
     let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&existing) = guard.runtimes.get(name) {
+        drop(guard);
+        dispose_unused(rt);
+        tracing::info!("named_runtime({name}) reused");
+        return Ok(existing);
+    }
+    #[cfg(not(feature = "unbounded"))]
+    if let Err(err) = check_capacity(guard.runtimes.len()) {
+        drop(guard);
+        dispose_unused(rt);
+        return Err(err);
+    }
     let leaked: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
     guard.runtimes.insert(name.to_string(), leaked);
     tracing::info!("named_runtime({name}) created");
@@ -228,49 +300,6 @@ fn create_runtime(
 /// ```
 pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
     try_named_runtime(name).unwrap_or_else(|err| panic!("{err}"))
-}
-
-/// Fallible variant of [`named_runtime`]: rejected names and a full
-/// registry surface as `Err` instead of a panic.
-///
-/// # Errors
-///
-/// With the `explicit_name` feature enabled, returns
-/// `NameError::NotAllowed` when the allowlist does not authorize `name`.
-/// Returns `NameError::RegistryFull` when the registry is at capacity
-/// (see the `unbounded` feature).
-pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime, NameError> {
-    // Poison-safe: a panic while holding the lock must not take down all
-    // future lookups; the registry invariant survives a partial insert.
-    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(rt) = guard.runtimes.get(name) {
-        tracing::info!("named_runtime({name}) reused");
-        return Ok(rt);
-    }
-
-    #[cfg(feature = "explicit_name")]
-    {
-        if guard.allowed.is_empty() {
-            return Err(NameError::NotAllowed {
-                name: name.to_string(),
-                registered: 0,
-            });
-        }
-        if !guard.allowed.contains(name) {
-            #[cfg(feature = "glob_support")]
-            {
-                if guard.compiled.is_match(name) {
-                    return create_runtime(name, &mut guard);
-                }
-            }
-            return Err(NameError::NotAllowed {
-                name: name.to_string(),
-                registered: guard.allowed.len(),
-            });
-        }
-    }
-
-    create_runtime(name, &mut guard)
 }
 
 /// Authorize a runtime name, or (with `glob_support`) a glob pattern such
