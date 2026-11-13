@@ -56,6 +56,14 @@ VERSION=0.8.1`):
 ./scripts/governance_consumer_smoke.sh 0.8.1
 ```
 
+Backwards-compatibility check before publishing — runs the consumer
+smoke against every version in `scripts/backcompat_versions.txt`
+(`VERSION!` entries are pinned expected-failures):
+
+```bash
+./scripts/backcompat_check.sh
+```
+
 ## Project conventions
 
 - One topic per commit; never stack uncommitted edits; split hunks when

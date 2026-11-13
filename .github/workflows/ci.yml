@@ -33,6 +33,9 @@ jobs:
           cargo run --example demo_backpressure
           cargo run --example demo_panic
           cargo run --example stress_test
+      - name: governance consumer smoke (local crate as downstream)
+        shell: bash
+        run: ./scripts/governance_consumer_smoke.sh
 
   msrv:
     runs-on: ubuntu-latest

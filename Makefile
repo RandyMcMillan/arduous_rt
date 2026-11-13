@@ -33,6 +33,9 @@ test-external: ## Run ignored external/network tests
 consumer-smoke: ## Downstream governance smoke test (local crate; pass VERSION to test published)
 	./scripts/governance_consumer_smoke.sh $(VERSION)
 
+backcompat: ## Backwards-compat check against published versions (scripts/backcompat_versions.txt)
+	./scripts/backcompat_check.sh
+
 test-all: ## Run all tests including ignored (nocapture), then build all examples
 	cargo test -- --include-ignored --nocapture
 	cargo build --examples

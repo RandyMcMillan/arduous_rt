@@ -19,6 +19,9 @@ test-external:
 consumer-smoke:
   @make consumer-smoke
 
+backcompat:
+  @make backcompat
+
 test-all:
   @make test-all
 
