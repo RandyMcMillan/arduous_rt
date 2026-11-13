@@ -11,7 +11,9 @@
 //! threads and memory without bound, so reuse names rather than minting
 //! new ones. By default the registry holds at most 256 runtimes and
 //! panics on the 257th distinct name; enable the `unbounded` feature to
-//! remove the cap. Never derive names from untrusted input.
+//! remove the cap. As with `explicit_name`, cargo features unify across
+//! the dependency graph, so a dependency can enable `unbounded` for the
+//! whole build. Never derive names from untrusted input.
 //!
 //! With the `explicit_name` feature, names must first be authorized with
 //! `allow_name`, and an empty allowlist rejects every new name. The
@@ -56,7 +58,9 @@
 //! assert!(std::ptr::eq(rt, arduous_rt::named_runtime("example")));
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(feature = "explicit_name")]
+use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
 use std::sync::{LazyLock, Mutex};
