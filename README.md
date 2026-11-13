@@ -1,5 +1,9 @@
 # arduous_rt
 
+[![crates.io](https://img.shields.io/crates/v/arduous_rt.svg)](https://crates.io/crates/arduous_rt)
+[![docs.rs](https://img.shields.io/docsrs/arduous_rt)](https://docs.rs/arduous_rt)
+[![CI](https://github.com/RandyMcMillan/arduous_rt/actions/workflows/ci.yml/badge.svg)](https://github.com/RandyMcMillan/arduous_rt/actions/workflows/ci.yml)
+
 `arduous_rt` is a small, focused Rust crate that provides **process-global Tokio runtimes** that can be created, reused, nested, and composed. It is designed for applications and libraries that need a stable asynchronous execution backend without threading a runtime handle through every layer of the call stack.
 
 ![](arduous_rt.png)
