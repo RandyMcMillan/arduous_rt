@@ -5,6 +5,8 @@ use tokio::time::{Duration, sleep};
 fn main() {
     #[cfg(feature = "console")]
     console_subscriber::init();
+    #[cfg(not(feature = "console"))]
+    tracing_subscriber::fmt::init();
 
     let rt = named_runtime("demo_backpressure");
     banner("Triggering Channel Backpressure Demo...");

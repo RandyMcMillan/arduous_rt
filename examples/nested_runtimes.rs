@@ -2,6 +2,7 @@ use arduous_rt::{child_runtime, global_rt, run};
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
     let outer = global_rt();
     let inner = child_runtime("global", "inner");
 

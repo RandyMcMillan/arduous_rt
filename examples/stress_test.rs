@@ -2,6 +2,7 @@ use arduous_rt::{banner, stress, stress_chain};
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
     let runtimes = stress_chain();
     let depth = runtimes.len();
     let tasks_per = 64usize;

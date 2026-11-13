@@ -1,6 +1,7 @@
 use arduous_rt::{nested_chain, run};
 
 fn main() {
+    tracing_subscriber::fmt::init();
     for &n in &[1usize, 2, 3, 5, 8] {
         let chain = nested_chain(n);
         let leaf = *chain.last().unwrap();

@@ -4,19 +4,22 @@ use std::future::Future;
 use std::sync::Mutex;
 use std::time::Instant;
 
-/// A trace log that is always emitted, regardless of configured log level.
+#[doc(hidden)]
+pub use tracing as __tracing;
+
+/// Emit an info-level event through the `tracing` facade.
+///
+/// The event is delivered to whatever subscriber the running binary has
+/// installed; with no subscriber installed it is a no-op.
 #[macro_export]
 macro_rules! arduous_trace {
     ($($arg:tt)*) => {
-        println!("============================================================");
-        println!(" [trace] {}", format!($($arg)*));
-        println!("============================================================");
+        $crate::__tracing::info!($($arg)*)
     };
 }
 
 //global_rt
 pub fn global_rt() -> &'static tokio::runtime::Runtime {
-    arduous_trace!("global_rt() invoked");
     named_runtime("global")
 }
 
@@ -27,14 +30,14 @@ pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
 
     let mut guard = RUNTIMES.lock().unwrap();
     if let Some(rt) = guard.get(name) {
-        arduous_trace!("named_runtime({name}) reused");
+        tracing::info!("named_runtime({name}) reused");
         return rt;
     }
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     let leaked: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
     guard.insert(name.to_string(), leaked);
-    arduous_trace!("named_runtime({name}) created");
+    tracing::info!("named_runtime({name}) created");
     leaked
 }
 
@@ -114,10 +117,7 @@ pub fn timed<R>(label: &str, f: impl FnOnce() -> R) -> R {
     let start = Instant::now();
     let result = f();
     let elapsed = start.elapsed();
-    banner(&format!(
-        "[arduous_rt::timing] {label}: {:.3} ms",
-        elapsed.as_secs_f64() * 1000.0
-    ));
+    tracing::info!("{label}: {:.3} ms", elapsed.as_secs_f64() * 1000.0);
     result
 }
 
@@ -129,10 +129,7 @@ where
     let start = Instant::now();
     let result = f.await;
     let elapsed = start.elapsed();
-    banner(&format!(
-        "[arduous_rt::timing] {label}: {:.3} ms",
-        elapsed.as_secs_f64() * 1000.0
-    ));
+    tracing::info!("{label}: {:.3} ms", elapsed.as_secs_f64() * 1000.0);
     result
 }
 
@@ -151,9 +148,7 @@ pub fn benchmark(label: &str, iterations: usize, mut f: impl FnMut()) {
         total += elapsed;
     }
     let avg = total / iterations as u128;
-    banner(&format!(
-        "[arduous_rt::bench] {label}: iters={iterations} min={min}ns avg={avg}ns max={max}ns"
-    ));
+    tracing::info!("{label}: iters={iterations} min={min}ns avg={avg}ns max={max}ns");
 }
 
 /// Run an async `f` repeatedly and report simple timing statistics.
@@ -175,9 +170,7 @@ where
         total += elapsed;
     }
     let avg = total / iterations as u128;
-    banner(&format!(
-        "[arduous_rt::bench] {label}: iters={iterations} min={min}ns avg={avg}ns max={max}ns"
-    ));
+    tracing::info!("{label}: iters={iterations} min={min}ns avg={avg}ns max={max}ns");
 }
 
 /// Print an obvious banner around `message`.
@@ -204,7 +197,7 @@ pub fn stress_chain() -> Vec<&'static tokio::runtime::Runtime> {
 ///
 /// Spawns `tasks_per` tasks on each runtime and aggregates their results.
 pub async fn stress(runtimes: &[&'static tokio::runtime::Runtime], tasks_per: usize) -> i64 {
-    arduous_trace!(
+    tracing::info!(
         "stress starting: runtimes={} tasks_per={} total={}",
         runtimes.len(),
         tasks_per,
@@ -223,7 +216,7 @@ pub async fn stress(runtimes: &[&'static tokio::runtime::Runtime], tasks_per: us
     for handle in handles {
         total += handle.await.expect("stress task panicked");
     }
-    arduous_trace!("stress finished: result={total}");
+    tracing::info!("stress finished: result={total}");
     total
 }
 

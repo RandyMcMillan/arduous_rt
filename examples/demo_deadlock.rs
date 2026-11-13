@@ -6,6 +6,8 @@ use arduous_rt::{banner, named_runtime};
 fn main() {
     #[cfg(feature = "console")]
     console_subscriber::init();
+    #[cfg(not(feature = "console"))]
+    tracing_subscriber::fmt::init();
 
     let rt = named_runtime("demo_deadlock");
     banner("Triggering Deadlock Demo...");

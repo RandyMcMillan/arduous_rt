@@ -7,6 +7,8 @@ use tokio::time::Duration;
 fn main() {
     #[cfg(feature = "console")]
     console_subscriber::init();
+    #[cfg(not(feature = "console"))]
+    tracing_subscriber::fmt::init();
 
     let rt = named_runtime("demo_starvation");
     banner("Triggering Task Starvation Demo...");
