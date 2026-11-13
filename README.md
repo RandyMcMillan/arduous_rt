@@ -28,7 +28,7 @@ Or, once published:
 
 ```toml
 [dependencies]
-arduous_rt = "0.5"
+arduous_rt = "0.6"
 ```
 
 ## Quick start

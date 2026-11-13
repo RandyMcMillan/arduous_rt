@@ -1,6 +1,6 @@
 [package]
 name = "arduous_rt"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 readme = "README.md"
 description = "Process-global named Tokio runtimes with nesting, reentrancy-safe execution, and stress-testing helpers"
