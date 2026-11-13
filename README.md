@@ -147,6 +147,8 @@ cargo run --example nested_runtimes
 cargo run --example nested_proofs
 cargo run --example stress_test
 cargo run --example trace_demo
+cargo run --example demo_backpressure
+cargo run --example demo_panic
 ```
 
 ## Tests
@@ -230,5 +232,5 @@ tokio-console
 - Creating many runtimes is expensive; `stress_chain()` caps depth at 16.
 - `Runtime::block_on` must not be called from within an async context on the *same* runtime. Use `run()` or `spawn()` instead.
 - The crate does not shut down runtimes; they persist until process exit.
-```<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Wrote README.md. Good. Maybe update Cargo.toml to include readme = "README.md"? Not necessary. Could add. Let's add readme field.<|end|><|start|>assist to=edit<|channel|>analysis <|constrain|>xml<|message|><rfl:parameter name="path">
-/Users/Shared/github/global_rt/Cargo.toml
+
+-
