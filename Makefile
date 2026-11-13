@@ -30,6 +30,9 @@ test-captured: ## Run tests with captured output
 test-external: ## Run ignored external/network tests
 	cargo test -- --ignored
 
+consumer-smoke: ## Downstream governance smoke test (local crate; pass VERSION to test published)
+	./scripts/governance_consumer_smoke.sh $(VERSION)
+
 test-all: ## Run all tests including ignored (nocapture), then build all examples
 	cargo test -- --include-ignored --nocapture
 	cargo build --examples

@@ -16,6 +16,9 @@ test-captured:
 test-external:
   @make test-external
 
+consumer-smoke:
+  @make consumer-smoke
+
 test-all:
   @make test-all
 

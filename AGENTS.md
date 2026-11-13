@@ -47,6 +47,15 @@ timeout 5s cargo run --example demo_deadlock
 timeout 5s cargo run --example demo_starvation
 ```
 
+Downstream governance smoke test — a throwaway consumer project against
+the local crate, or a published version (`make consumer-smoke
+VERSION=0.8.1`):
+
+```bash
+./scripts/governance_consumer_smoke.sh
+./scripts/governance_consumer_smoke.sh 0.8.1
+```
+
 ## Project conventions
 
 - One topic per commit; never stack uncommitted edits; split hunks when
