@@ -32,7 +32,10 @@
 //! `.cargo/config.toml` does for its examples. The `governance` feature
 //! (which implies both filters) adds deny rules that override allows,
 //! per-pattern quotas, registry introspection, and structured audit
-//! events — see `deny_name`, `set_quota`, `list_runtimes`.
+//! events — see `deny_name`, `set_quota`, `list_runtimes`. Domain tokens
+//! (`DomainToken::acquire` + `named_runtime_in`) scope creation to a
+//! domain, and `Policy`/`set_policy` (or `policy_from_toml` with the
+//! `policy-toml` feature) swaps the whole policy atomically.
 //!
 //! # Nested chains
 //!
@@ -134,6 +137,14 @@ pub enum NameError {
         /// The configured maximum.
         max: usize,
     },
+    /// The name lies outside the domain of the presented token.
+    #[cfg(feature = "governance")]
+    OutsideDomain {
+        /// The rejected name.
+        name: String,
+        /// The token's domain.
+        domain: String,
+    },
     /// The registry is full; enable the `unbounded` feature to lift the cap.
     RegistryFull,
     /// The allowlist entry is not a valid glob pattern.
@@ -172,6 +183,12 @@ impl fmt::Display for NameError {
                 f,
                 "pattern {pattern:?} is at its quota of {max} runtimes\n\
                  hint: raise the quota with arduous_rt::set_quota, or reuse names under that pattern"
+            ),
+            #[cfg(feature = "governance")]
+            Self::OutsideDomain { name, domain } => write!(
+                f,
+                "runtime name {name:?} is outside the domain of this token ({domain:?})\n\
+                 hint: acquire a token for the name's domain with arduous_rt::DomainToken::acquire, or rename"
             ),
             Self::RegistryFull => write!(
                 f,
@@ -616,6 +633,187 @@ pub fn list_runtimes() -> Vec<RuntimeInfo> {
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// An opaque authorization for one domain. Requires the `governance`
+/// feature.
+///
+/// Acquiring a token checks the domain against the current policy; using
+/// the token (`named_runtime_in`) restricts creation to names at or below
+/// that domain. Tokens are structural, cooperative guardrails — they
+/// organize well-behaved code, they do not sandbox hostile code.
+#[cfg(feature = "governance")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainToken {
+    domain: String,
+}
+
+#[cfg(feature = "governance")]
+impl DomainToken {
+    /// Validate `domain` against the current policy and hold it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the policy rejection (`NotAllowed`, `Denied`, or
+    /// `QuotaExceeded` for the domain itself) when the domain is not
+    /// authorized.
+    pub fn acquire(domain: &str) -> Result<Self, NameError> {
+        let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        matched_pattern(&guard, domain)?;
+        Ok(Self {
+            domain: domain.to_string(),
+        })
+    }
+
+    /// The domain this token authorizes.
+    pub fn domain(&self) -> &str {
+        &self.domain
+    }
+}
+
+/// Get or create a runtime that must live at or below `token`'s domain:
+/// `domain` itself or any `domain/...` path. Requires `governance`.
+///
+/// # Errors
+///
+/// Returns [`NameError::OutsideDomain`] when `name` escapes the token's
+/// domain, then any policy rejection `try_named_runtime` would return.
+#[cfg(feature = "governance")]
+pub fn named_runtime_in(
+    token: &DomainToken,
+    name: &str,
+) -> Result<&'static tokio::runtime::Runtime, NameError> {
+    if name != token.domain && !name.starts_with(&format!("{}/", token.domain)) {
+        return Err(NameError::OutsideDomain {
+            name: name.to_string(),
+            domain: token.domain.clone(),
+        });
+    }
+    try_named_runtime(name)
+}
+
+/// One allow entry of a [`Policy`].
+#[cfg(feature = "governance")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "policy-toml", derive(serde::Deserialize))]
+pub struct PolicyAllow {
+    /// The allow pattern (exact name or glob).
+    pub pattern: String,
+    /// Optional cap on runtimes created through this pattern.
+    pub quota: Option<usize>,
+}
+
+/// A declarative governance policy. Requires the `governance` feature.
+///
+/// With the `policy-toml` feature this deserializes from TOML:
+///
+/// ```toml
+/// deny = ["org.gnostr.experimental.*"]
+///
+/// [[allow]]
+/// pattern = "org.gnostr.*"
+/// quota = 8
+/// ```
+#[cfg(feature = "governance")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "policy-toml", derive(serde::Deserialize))]
+pub struct Policy {
+    /// Deny patterns; take precedence over every allow entry.
+    #[cfg_attr(feature = "policy-toml", serde(default))]
+    pub deny: Vec<String>,
+    /// Allow patterns with optional per-pattern quotas.
+    #[cfg_attr(feature = "policy-toml", serde(default))]
+    pub allow: Vec<PolicyAllow>,
+}
+
+/// Atomically replace the governance policy. Existing runtimes keep
+/// running; per-pattern counts are recomputed against the new allowlist.
+/// Requires the `governance` feature.
+///
+/// # Errors
+///
+/// Returns `NameError::InvalidPattern` when any deny or allow pattern is
+/// not a valid glob; the previous policy is left untouched.
+#[cfg(feature = "governance")]
+pub fn set_policy(policy: Policy) -> Result<(), NameError> {
+    let mut allowed = Vec::with_capacity(policy.allow.len());
+    for entry in &policy.allow {
+        allowed.push((entry.pattern.clone(), validate_glob(&entry.pattern)?));
+    }
+    let mut denied = Vec::with_capacity(policy.deny.len());
+    for pattern in &policy.deny {
+        denied.push((pattern.clone(), validate_glob(pattern)?));
+    }
+    let quotas: HashMap<String, usize> = policy
+        .allow
+        .iter()
+        .filter_map(|entry| entry.quota.map(|quota| (entry.pattern.clone(), quota)))
+        .collect();
+
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    guard.allowed = allowed;
+    guard.denied = denied;
+    guard.quotas = quotas;
+    // Recompute counts so pre-existing runtimes occupy quota under the
+    // new policy instead of getting a fresh allowance.
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for name in guard.runtimes.keys() {
+        if let Some(pattern) = find_match(&guard.allowed, name) {
+            *counts.entry(pattern.to_string()).or_insert(0) += 1;
+        }
+    }
+    guard.counts = counts;
+    Ok(())
+}
+
+/// Why a TOML policy failed to load. Requires the `policy-toml` feature.
+#[cfg(feature = "policy-toml")]
+#[derive(Debug)]
+pub enum PolicyError {
+    /// The input is not valid TOML for a [`Policy`].
+    Parse(toml::de::Error),
+    /// A deny or allow pattern is not a valid glob.
+    Invalid(NameError),
+}
+
+#[cfg(feature = "policy-toml")]
+impl fmt::Display for PolicyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(err) => write!(f, "invalid policy toml: {err}"),
+            Self::Invalid(err) => write!(f, "invalid policy pattern: {err}"),
+        }
+    }
+}
+
+#[cfg(feature = "policy-toml")]
+impl std::error::Error for PolicyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Parse(err) => Some(err),
+            Self::Invalid(err) => Some(err),
+        }
+    }
+}
+
+/// Parse and validate a [`Policy`] from TOML. Glob validation happens
+/// here so `set_policy` cannot fail on syntax after a successful load.
+/// Requires the `policy-toml` feature.
+///
+/// # Errors
+///
+/// Returns [`PolicyError::Parse`] for malformed TOML and
+/// [`PolicyError::Invalid`] for a syntactically invalid glob.
+#[cfg(feature = "policy-toml")]
+pub fn policy_from_toml(input: &str) -> Result<Policy, PolicyError> {
+    let policy: Policy = toml::from_str(input).map_err(PolicyError::Parse)?;
+    for pattern in &policy.deny {
+        validate_glob(pattern).map_err(PolicyError::Invalid)?;
+    }
+    for entry in &policy.allow {
+        validate_glob(&entry.pattern).map_err(PolicyError::Invalid)?;
+    }
+    Ok(policy)
 }
 
 /// Create (or reuse) a child runtime scoped under a parent runtime name.
@@ -1191,6 +1389,26 @@ mod tests {
         assert!(matches!(
             deny_name("gov.[bad"),
             Err(NameError::InvalidPattern(_))
+        ));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_token_scopes_creation_to_domain() {
+        allow_test_names();
+        allow_name("tok_demo").unwrap();
+        allow_name("tok_demo/*").unwrap();
+        let token = DomainToken::acquire("tok_demo").unwrap();
+        assert_eq!(token.domain(), "tok_demo");
+        assert!(named_runtime_in(&token, "tok_demo").is_ok());
+        assert!(named_runtime_in(&token, "tok_demo/worker").is_ok());
+        assert!(matches!(
+            named_runtime_in(&token, "other.place"),
+            Err(NameError::OutsideDomain { .. })
+        ));
+        assert!(matches!(
+            DomainToken::acquire("nowhere.atall"),
+            Err(NameError::NotAllowed { .. })
         ));
     }
 

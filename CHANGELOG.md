@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quotas via `set_quota` with `NameError::QuotaExceeded`, introspection
   via `registered_patterns`/`list_runtimes`, and structured tracing
   events on governance decisions.
+- `DomainToken` + `named_runtime_in`: tokens authorize one domain and
+  scope runtime creation to it (`NameError::OutsideDomain` otherwise).
+- `Policy` + `set_policy`: atomic whole-policy swaps; per-pattern quota
+  counts are recomputed against pre-existing runtimes.
+- `policy-toml` feature: `policy_from_toml` parses and validates a TOML
+  policy; `PolicyError::{Parse, Invalid}`.
 
 ## [0.7.0] - 2026-11-13
 

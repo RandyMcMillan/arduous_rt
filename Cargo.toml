@@ -24,11 +24,16 @@ glob_support = ["explicit_name", "dep:globset"]
 # Superset of the name filters: adds deny rules, per-pattern quotas,
 # introspection, and audit events. See docs/governance-plan.md.
 governance = ["explicit_name", "glob_support"]
+# Declarative policy loading (TOML). Implies governance; pulls in
+# serde/toml, kept out of the base dependency tree.
+policy-toml = ["governance", "dep:serde", "dep:toml"]
 
 [dependencies]
 console-subscriber = { version = "0.4", optional = true }
 globset = { version = "0.4", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "tracing"] }
+toml = { version = "1", optional = true }
 tracing = "0.1"
 
 [dev-dependencies]

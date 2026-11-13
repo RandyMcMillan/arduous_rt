@@ -39,7 +39,7 @@ the two existing features keep working as aliases).
   `quota_exceeded { pattern, max }`. (The `tracing` facade is already
   the crate's observability story.)
 
-## Phase 1 — v0.9: capabilities + declarative policy
+## Phase 1 — v0.9: capabilities + declarative policy ✅ implemented (unreleased)
 
 Turns the naming convention into enforcement.
 

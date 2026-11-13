@@ -43,6 +43,7 @@ jobs:
           - cargo test
           - cargo test --features explicit_name
           - cargo test --features governance
+          - cargo test --features policy-toml
           - cargo test --all-features
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
