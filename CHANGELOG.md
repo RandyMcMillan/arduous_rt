@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `governance` feature (implies `explicit_name` + `glob_support`):
+  `deny_name`/`undeny_name` with deny-beats-allow precedence, per-pattern
+  quotas via `set_quota` with `NameError::QuotaExceeded`, introspection
+  via `registered_patterns`/`list_runtimes`, and structured tracing
+  events on governance decisions.
+
 ## [0.7.0] - 2026-11-13
 
 ### Changed

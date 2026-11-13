@@ -20,7 +20,7 @@ here protects against accidents, unbounded growth, and ops policy
 violations — not adversarial code. No cgroups, no seccomp, no process
 isolation. Say so in docs wherever the feature is described.
 
-## Phase 0 — v0.8: deny rules, quotas, audit
+## Phase 0 — v0.8: deny rules, quotas, audit ✅ implemented (unreleased)
 
 Feature gate: `governance` (implies `explicit_name` + `glob_support`;
 the two existing features keep working as aliases).

@@ -21,6 +21,9 @@ console = ["dep:console-subscriber"]
 unbounded = []
 explicit_name = []
 glob_support = ["explicit_name", "dep:globset"]
+# Superset of the name filters: adds deny rules, per-pattern quotas,
+# introspection, and audit events. See docs/governance-plan.md.
+governance = ["explicit_name", "glob_support"]
 
 [dependencies]
 console-subscriber = { version = "0.4", optional = true }

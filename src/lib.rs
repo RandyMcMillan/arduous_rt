@@ -29,7 +29,10 @@
 //! names, so allow those (or a matching glob) when relying on them under
 //! `explicit_name`. The `console` feature assumes the `tokio_unstable`
 //! cfg — set `RUSTFLAGS="--cfg tokio_unstable"` as this repository's
-//! `.cargo/config.toml` does for its examples.
+//! `.cargo/config.toml` does for its examples. The `governance` feature
+//! (which implies both filters) adds deny rules that override allows,
+//! per-pattern quotas, registry introspection, and structured audit
+//! events — see `deny_name`, `set_quota`, `list_runtimes`.
 //!
 //! # Nested chains
 //!
@@ -66,7 +69,7 @@
 //! ```
 
 use std::collections::HashMap;
-#[cfg(feature = "explicit_name")]
+#[cfg(all(feature = "explicit_name", not(feature = "governance")))]
 use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
@@ -115,6 +118,22 @@ pub enum NameError {
         /// How many patterns were registered at the time of rejection.
         registered: usize,
     },
+    /// The name matched a deny rule (deny wins over allow).
+    #[cfg(feature = "governance")]
+    Denied {
+        /// The rejected name.
+        name: String,
+        /// The deny pattern that matched.
+        by: String,
+    },
+    /// The matched allow pattern is at its runtime quota.
+    #[cfg(feature = "governance")]
+    QuotaExceeded {
+        /// The quota-limited pattern.
+        pattern: String,
+        /// The configured maximum.
+        max: usize,
+    },
     /// The registry is full; enable the `unbounded` feature to lift the cap.
     RegistryFull,
     /// The allowlist entry is not a valid glob pattern.
@@ -142,6 +161,18 @@ impl fmt::Display for NameError {
                     )
                 }
             }
+            #[cfg(feature = "governance")]
+            Self::Denied { name, by } => write!(
+                f,
+                "runtime name {name:?} is denied by pattern {by:?}\n\
+                 hint: remove the deny rule with arduous_rt::undeny_name({by:?}) or narrow it"
+            ),
+            #[cfg(feature = "governance")]
+            Self::QuotaExceeded { pattern, max } => write!(
+                f,
+                "pattern {pattern:?} is at its quota of {max} runtimes\n\
+                 hint: raise the quota with arduous_rt::set_quota, or reuse names under that pattern"
+            ),
             Self::RegistryFull => write!(
                 f,
                 "runtime registry is full\n\
@@ -162,19 +193,39 @@ const MAX_RUNTIMES: usize = 256;
 
 struct Registry {
     runtimes: HashMap<String, &'static tokio::runtime::Runtime>,
-    #[cfg(feature = "explicit_name")]
+    #[cfg(all(feature = "explicit_name", not(feature = "governance")))]
     allowed: HashSet<String>,
-    #[cfg(feature = "glob_support")]
+    #[cfg(all(feature = "glob_support", not(feature = "governance")))]
     compiled: globset::GlobSet,
+    // Governance stores patterns as ordered (pattern, compiled matcher)
+    // pairs: order gives deterministic first-match semantics, and the
+    // matcher identifies which pattern authorized a name (for quotas,
+    // audit, and introspection).
+    #[cfg(feature = "governance")]
+    allowed: Vec<(String, globset::GlobSet)>,
+    #[cfg(feature = "governance")]
+    denied: Vec<(String, globset::GlobSet)>,
+    #[cfg(feature = "governance")]
+    quotas: HashMap<String, usize>,
+    #[cfg(feature = "governance")]
+    counts: HashMap<String, usize>,
 }
 
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
     Mutex::new(Registry {
         runtimes: HashMap::new(),
-        #[cfg(feature = "explicit_name")]
+        #[cfg(all(feature = "explicit_name", not(feature = "governance")))]
         allowed: HashSet::new(),
-        #[cfg(feature = "glob_support")]
+        #[cfg(all(feature = "glob_support", not(feature = "governance")))]
         compiled: globset::GlobSet::empty(),
+        #[cfg(feature = "governance")]
+        allowed: Vec::new(),
+        #[cfg(feature = "governance")]
+        denied: Vec::new(),
+        #[cfg(feature = "governance")]
+        quotas: HashMap::new(),
+        #[cfg(feature = "governance")]
+        counts: HashMap::new(),
     })
 });
 
@@ -186,7 +237,7 @@ fn check_capacity(len: usize) -> Result<(), NameError> {
     Ok(())
 }
 
-#[cfg(feature = "glob_support")]
+#[cfg(all(feature = "glob_support", not(feature = "governance")))]
 fn compile_allowed(allowed: &HashSet<String>) -> globset::GlobSet {
     use globset::GlobSetBuilder;
     let mut builder = GlobSetBuilder::new();
@@ -200,8 +251,70 @@ fn compile_allowed(allowed: &HashSet<String>) -> globset::GlobSet {
         .expect("allowlist patterns are validated at registration")
 }
 
+/// Compile a pattern or reject it with `NameError::InvalidPattern`.
+#[cfg(feature = "governance")]
+fn validate_glob(pattern: &str) -> Result<globset::GlobSet, NameError> {
+    let glob = globset::Glob::new(pattern)
+        .map_err(|err| NameError::InvalidPattern(format!("{pattern}: {err}")))?;
+    globset::GlobSetBuilder::new()
+        .add(glob)
+        .build()
+        .map_err(|err| NameError::InvalidPattern(format!("{pattern}: {err}")))
+}
+
+/// First pattern that matches `name`: an exact pattern-string match or a
+/// glob hit. Registration order makes matching deterministic.
+#[cfg(feature = "governance")]
+fn find_match<'a>(patterns: &'a [(String, globset::GlobSet)], name: &str) -> Option<&'a str> {
+    patterns
+        .iter()
+        .find(|(p, g)| p == name || g.is_match(name))
+        .map(|(p, _)| p.as_str())
+}
+
+/// Resolve `name` against the governance policy: deny first, then the
+/// allowlist, then the matched pattern's quota. Returns the authorized
+/// pattern on success.
+#[cfg(feature = "governance")]
+fn matched_pattern(reg: &Registry, name: &str) -> Result<String, NameError> {
+    if let Some(by) = find_match(&reg.denied, name) {
+        tracing::warn!(name, by, "governance: runtime creation denied");
+        return Err(NameError::Denied {
+            name: name.to_string(),
+            by: by.to_string(),
+        });
+    }
+    match find_match(&reg.allowed, name) {
+        Some(pattern) => {
+            if let Some(&max) = reg.quotas.get(pattern) {
+                let current = reg.counts.get(pattern).copied().unwrap_or(0);
+                if current >= max {
+                    tracing::warn!(name, pattern, max, "governance: pattern quota exceeded");
+                    return Err(NameError::QuotaExceeded {
+                        pattern: pattern.to_string(),
+                        max,
+                    });
+                }
+            }
+            Ok(pattern.to_string())
+        }
+        None => {
+            tracing::warn!(
+                name,
+                registered = reg.allowed.len(),
+                "governance: name not allowed"
+            );
+            Err(NameError::NotAllowed {
+                name: name.to_string(),
+                registered: reg.allowed.len(),
+            })
+        }
+    }
+}
+
 /// Run the allowlist check for `name` against the registry.
-#[cfg(feature = "explicit_name")]
+/// (Governance builds on [`matched_pattern`] instead.)
+#[cfg(all(feature = "explicit_name", not(feature = "governance")))]
 fn check_allowed(reg: &Registry, name: &str) -> Result<(), NameError> {
     if reg.allowed.is_empty() {
         return Err(NameError::NotAllowed {
@@ -253,7 +366,11 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
         return Ok(rt);
     }
 
-    #[cfg(feature = "explicit_name")]
+    // Authorize under the lock. The governance pass also resolves the
+    // matched pattern, which drives quota accounting on insert.
+    #[cfg(feature = "governance")]
+    matched_pattern(&guard, name)?;
+    #[cfg(all(feature = "explicit_name", not(feature = "governance")))]
     check_allowed(&guard, name)?;
     #[cfg(not(feature = "unbounded"))]
     check_capacity(guard.runtimes.len())?;
@@ -273,6 +390,8 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
         tracing::info!("named_runtime({name}) reused");
         return Ok(existing);
     }
+    #[cfg(feature = "governance")]
+    let matched = matched_pattern(&guard, name)?;
     #[cfg(not(feature = "unbounded"))]
     if let Err(err) = check_capacity(guard.runtimes.len()) {
         drop(guard);
@@ -281,6 +400,16 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
     }
     let leaked: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
     guard.runtimes.insert(name.to_string(), leaked);
+    #[cfg(feature = "governance")]
+    {
+        let count = {
+            let c = guard.counts.entry(matched.clone()).or_insert(0);
+            *c += 1;
+            *c
+        };
+        tracing::info!(name, matched, count, "named_runtime created");
+    }
+    #[cfg(not(feature = "governance"))]
     tracing::info!("named_runtime({name}) created");
     Ok(leaked)
 }
@@ -322,15 +451,27 @@ pub fn named_runtime(name: &str) -> &'static tokio::runtime::Runtime {
 /// `pattern` is not a valid glob.
 #[cfg(feature = "explicit_name")]
 pub fn allow_name(pattern: &str) -> Result<(), NameError> {
-    #[cfg(feature = "glob_support")]
+    #[cfg(feature = "governance")]
+    let glob = validate_glob(pattern)?;
+    #[cfg(all(feature = "glob_support", not(feature = "governance")))]
     if let Err(err) = globset::Glob::new(pattern) {
         return Err(NameError::InvalidPattern(format!("{pattern}: {err}")));
     };
     let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    guard.allowed.insert(pattern.to_string());
-    #[cfg(feature = "glob_support")]
+    #[cfg(feature = "governance")]
     {
-        guard.compiled = compile_allowed(&guard.allowed);
+        if guard.allowed.iter().any(|(p, _)| p == pattern) {
+            return Ok(());
+        }
+        guard.allowed.push((pattern.to_string(), glob));
+    }
+    #[cfg(all(feature = "explicit_name", not(feature = "governance")))]
+    {
+        guard.allowed.insert(pattern.to_string());
+        #[cfg(feature = "glob_support")]
+        {
+            guard.compiled = compile_allowed(&guard.allowed);
+        }
     }
     Ok(())
 }
@@ -341,15 +482,25 @@ pub fn allow_name(pattern: &str) -> Result<(), NameError> {
 #[cfg(feature = "explicit_name")]
 pub fn disallow_name(pattern: &str) -> bool {
     let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    let removed = guard.allowed.remove(pattern);
-    #[cfg(feature = "glob_support")]
-    if removed {
-        guard.compiled = compile_allowed(&guard.allowed);
+    #[cfg(feature = "governance")]
+    {
+        let before = guard.allowed.len();
+        guard.allowed.retain(|(p, _)| p != pattern);
+        guard.allowed.len() < before
     }
-    removed
+    #[cfg(all(feature = "explicit_name", not(feature = "governance")))]
+    {
+        let removed = guard.allowed.remove(pattern);
+        #[cfg(feature = "glob_support")]
+        if removed {
+            guard.compiled = compile_allowed(&guard.allowed);
+        }
+        removed
+    }
 }
 
-/// Whether `name` would pass the allowlist right now.
+/// Whether `name` would pass the allowlist (and, under `governance`,
+/// the deny rules) right now. Quotas are not consulted.
 ///
 /// Requires the `explicit_name` feature. An empty allowlist rejects all
 /// names.
@@ -359,16 +510,112 @@ pub fn is_name_allowed(name: &str) -> bool {
     if guard.allowed.is_empty() {
         return false;
     }
-    guard.allowed.contains(name) || {
-        #[cfg(feature = "glob_support")]
-        {
-            guard.compiled.is_match(name)
-        }
-        #[cfg(not(feature = "glob_support"))]
-        {
-            false
+    #[cfg(feature = "governance")]
+    {
+        find_match(&guard.denied, name).is_none() && find_match(&guard.allowed, name).is_some()
+    }
+    #[cfg(all(feature = "explicit_name", not(feature = "governance")))]
+    {
+        guard.allowed.contains(name) || {
+            #[cfg(feature = "glob_support")]
+            {
+                guard.compiled.is_match(name)
+            }
+            #[cfg(not(feature = "glob_support"))]
+            {
+                false
+            }
         }
     }
+}
+
+/// Deny a name or glob pattern. Deny rules take precedence over every
+/// allow rule, so `org.gnostr.*` plus `deny_name("org.gnostr.experimental.*")`
+/// authorizes the subtree except the experimental branch.
+///
+/// Requires the `governance` feature. Deny governs new creations only;
+/// runtimes created before the rule keep running.
+///
+/// # Errors
+///
+/// Returns `NameError::InvalidPattern` when `pattern` is not a valid glob.
+#[cfg(feature = "governance")]
+pub fn deny_name(pattern: &str) -> Result<(), NameError> {
+    let glob = validate_glob(pattern)?;
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.denied.iter().any(|(p, _)| p == pattern) {
+        return Ok(());
+    }
+    guard.denied.push((pattern.to_string(), glob));
+    Ok(())
+}
+
+/// Remove a deny rule. Returns whether it was registered.
+///
+/// Requires the `governance` feature.
+#[cfg(feature = "governance")]
+pub fn undeny_name(pattern: &str) -> bool {
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    let before = guard.denied.len();
+    guard.denied.retain(|(p, _)| p != pattern);
+    guard.denied.len() < before
+}
+
+/// Cap how many runtimes may be created through `pattern`. Checked at
+/// creation time; already-created runtimes are never reaped, and a quota
+/// of 0 blocks new creations through the pattern.
+///
+/// Requires the `governance` feature.
+///
+/// # Errors
+///
+/// Returns `NameError::InvalidPattern` when `pattern` is not a valid glob.
+#[cfg(feature = "governance")]
+pub fn set_quota(pattern: &str, max: usize) -> Result<(), NameError> {
+    validate_glob(pattern)?;
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    guard.quotas.insert(pattern.to_string(), max);
+    Ok(())
+}
+
+/// The registered allow patterns, in registration order.
+///
+/// Requires the `governance` feature.
+#[cfg(feature = "governance")]
+pub fn registered_patterns() -> Vec<String> {
+    let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    guard.allowed.iter().map(|(p, _)| p.clone()).collect()
+}
+
+/// One registered runtime, for introspection.
+///
+/// Requires the `governance` feature.
+#[cfg(feature = "governance")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeInfo {
+    /// The runtime's registry name.
+    pub name: String,
+    /// The allow pattern that would authorize this name today. `None` for
+    /// runtimes whose authorizing pattern has since been removed.
+    pub matched: Option<String>,
+}
+
+/// Every runtime in the registry, sorted by name for determinism.
+///
+/// Requires the `governance` feature.
+#[cfg(feature = "governance")]
+pub fn list_runtimes() -> Vec<RuntimeInfo> {
+    let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    let mut out: Vec<RuntimeInfo> = guard
+        .runtimes
+        .keys()
+        .map(|name| RuntimeInfo {
+            name: name.clone(),
+            matched: find_match(&guard.allowed, name).map(str::to_string),
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// Create (or reuse) a child runtime scoped under a parent runtime name.
@@ -884,6 +1131,65 @@ mod tests {
         allow_test_names();
         assert!(matches!(
             allow_name("org.[invalid"),
+            Err(NameError::InvalidPattern(_))
+        ));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_deny_overrides_allow() {
+        allow_test_names();
+        allow_name("gov_deny.*").unwrap();
+        deny_name("gov_deny.blocked.*").unwrap();
+        assert!(try_named_runtime("gov_deny.ok").is_ok());
+        assert!(matches!(
+            try_named_runtime("gov_deny.blocked.x"),
+            Err(NameError::Denied { .. })
+        ));
+        assert!(!is_name_allowed("gov_deny.blocked.x"));
+        assert!(is_name_allowed("gov_deny.ok"));
+        assert!(undeny_name("gov_deny.blocked.*"));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_quota_exceeded() {
+        allow_test_names();
+        allow_name("gov_quota.*").unwrap();
+        set_quota("gov_quota.*", 2).unwrap();
+        assert!(try_named_runtime("gov_quota.a").is_ok());
+        assert!(try_named_runtime("gov_quota.b").is_ok());
+        assert!(matches!(
+            try_named_runtime("gov_quota.c"),
+            Err(NameError::QuotaExceeded { max: 2, .. })
+        ));
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_introspection_lists_patterns_and_runtimes() {
+        allow_test_names();
+        allow_name("gov_intro.*").unwrap();
+        try_named_runtime("gov_intro.x").unwrap();
+        assert!(registered_patterns().iter().any(|p| p == "gov_intro.*"));
+        let runtimes = list_runtimes();
+        let info = runtimes
+            .iter()
+            .find(|r| r.name == "gov_intro.x")
+            .expect("gov_intro.x must be listed");
+        assert_eq!(info.matched.as_deref(), Some("gov_intro.*"));
+        let names: Vec<&str> = runtimes.iter().map(|r| r.name.as_str()).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted, "list_runtimes must be sorted by name");
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_rejects_invalid_deny_glob() {
+        allow_test_names();
+        assert!(matches!(
+            deny_name("gov.[bad"),
             Err(NameError::InvalidPattern(_))
         ));
     }
