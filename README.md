@@ -158,6 +158,7 @@ let rt = arduous_rt::named_runtime("org.gnostr.wallet"); // allowed by the glob
 | Reentrancy-safe `run()` | yes | no | no | no | no |
 | Name allowlist + glob filters | yes (`explicit_name` / `glob_support`) | no | no | no | no |
 | Registry cap + `unbounded` escape | yes | no | no | no | no |
+| Zero unsafe (compile-time enforced) | yes (`#![forbid(unsafe_code)]`) | — | — (your code) | no (internals) | no (internals) |
 
 [`trt`](https://crates.io/crates/trt) is the closest crate: a single process-global
 tokio runtime with spawn macros — it covers `global_rt()` and nothing else. The
@@ -208,6 +209,7 @@ Test categories:
 - **Lib tests**: basic runtime, named/distinct runtimes, cooperation, nesting, reentrancy, timing/benchmark utilities.
 - **Negative tests**: expected-failure cases (`#[should_panic]`, closed channels, aborted tasks).
 - **Arduous tests** (`tests/arduous.rs`): deep nesting, massive spawns, channel stress, shared state, barriers, timeouts, panics, large payloads, fan-out trees, etc.
+- **Concurrency identity**: repeated rounds of many threads racing to create the same fresh name must all receive the identical `&'static Runtime`, and repeated lookups on an existing name must stay pointer-stable.
 - **External tests** (ignored by default): HTTP smoke tests against `example.com` and `httpbin.org`.
 
 ## Tooling
@@ -233,6 +235,8 @@ make clean          # cargo clean
 - `named_runtime` uses a process-global `Mutex<HashMap>` guarded by a `std::sync::LazyLock`.
 - `run()` detects reentrancy via `Handle::id()` comparison, avoiding `block_on` on the same runtime.
 - External tests are `#[ignore]`d so the default suite stays deterministic and offline-friendly.
+- `#![forbid(unsafe_code)]`: no `unsafe` in the crate, enforced at compile time.
+- Deferred deliberately: loom model-checking of the registry race and an `RwLock` lookup path. The protocol is two short critical sections under one lock, covered by the concurrency-identity tests above; revisit if the registry gains more state or a profile shows lock contention.
 
 ## Demo: concurrency failure modes
 
