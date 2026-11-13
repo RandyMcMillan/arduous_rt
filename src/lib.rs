@@ -23,6 +23,11 @@
 //! Because cargo features unify across the dependency graph, a dependency
 //! can enable `explicit_name` for a build that never opted in; the
 //! rejection message explains how to authorize a name or opt back out.
+//! The bundled `nested_chain`/`stress_chain` helpers use fixed `level_N`
+//! names, so allow those (or a matching glob) when relying on them under
+//! `explicit_name`. The `console` feature assumes the `tokio_unstable`
+//! cfg — set `RUSTFLAGS="--cfg tokio_unstable"` as this repository's
+//! `.cargo/config.toml` does for its examples.
 //!
 //! # Nested chains
 //!

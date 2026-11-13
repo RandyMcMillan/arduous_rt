@@ -136,9 +136,9 @@ Runs `f` repeatedly and logs min/avg/max timings.
 
 ## Cargo features
 
-- `console` — tokio-console wiring for the demo examples.
+- `console` — tokio-console wiring for the demo examples. Downstream users must also set `RUSTFLAGS="--cfg tokio_unstable"` for it to produce data (this repo's `.cargo/config.toml` does that for the examples).
 - `unbounded` — removes the 256-runtime registry cap.
-- `explicit_name` — names must be pre-authorized with `allow_name`; an empty allowlist rejects every new name.
+- `explicit_name` — names must be pre-authorized with `allow_name`; an empty allowlist rejects every new name. The bundled `nested_chain`/`stress_chain` helpers use fixed `level_N` names — allow those (or a matching glob) when relying on the helpers.
 - `glob_support` — implies `explicit_name`; allowlist entries may be glob patterns such as `org.gnostr.*` or `org.gnostr.*-debug`.
 
 Requires the `glob_support` feature:

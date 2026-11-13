@@ -14,6 +14,8 @@ rust-version = "1.85"
 all-features = true
 
 [features]
+# Downstream users must also set RUSTFLAGS="--cfg tokio_unstable" for the
+# console feature to produce data (see .cargo/config.toml in this repo).
 console = ["dep:console-subscriber"]
 unbounded = []
 explicit_name = []
