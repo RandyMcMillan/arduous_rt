@@ -23,7 +23,7 @@ fn main() {
         out
     });
 
-    let _ = producer.block_on(producer_handle).unwrap();
+    producer.block_on(producer_handle).unwrap();
     println!("global runtime: {:?}", global_rt() as *const _);
     println!("received: {received:?}");
 }

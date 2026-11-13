@@ -8,7 +8,7 @@ fn main() {
         let proof = leaf.block_on(async {
             let mut total = 0i64;
             for (idx, rt) in chain.iter().enumerate() {
-                total += run(*rt, async move { (idx as i64) + 1 }).await;
+                total += run(rt, async move { (idx as i64) + 1 }).await;
             }
             total
         });
@@ -34,7 +34,7 @@ fn main() {
         let r = outer.block_on(async {
             let mut t = 0i64;
             for (i, rt) in chain.iter().enumerate() {
-                t += run(*rt, async move { i as i64 }).await;
+                t += run(rt, async move { i as i64 }).await;
             }
             t
         });

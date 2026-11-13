@@ -289,7 +289,7 @@ mod tests {
             sum
         });
 
-        assert_eq!(sum, 0 + 1 + 2 + 3 + 4);
+        assert_eq!(sum, 1 + 2 + 3 + 4);
     }
 
     #[test]
@@ -353,7 +353,7 @@ mod tests {
         let result = outer.block_on(async {
             let mut total = 0i64;
             for (idx, rt) in chain.iter().enumerate() {
-                let v = run(*rt, async move { (idx as i64) + 1 }).await;
+                let v = run(rt, async move { (idx as i64) + 1 }).await;
                 total += v;
             }
             total
@@ -376,7 +376,7 @@ mod tests {
             let r = outer.block_on(async {
                 let mut t = 0i64;
                 for (i, rt) in chain.iter().enumerate() {
-                    t += run(*rt, async move { i as i64 }).await;
+                    t += run(rt, async move { i as i64 }).await;
                 }
                 t
             });

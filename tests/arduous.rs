@@ -14,7 +14,7 @@ fn arduous_deep_nesting() {
     let result = leaf.block_on(async {
         let mut total = 0i64;
         for (i, rt) in chain.iter().enumerate() {
-            total += run(*rt, async move { i as i64 }).await;
+            total += run(rt, async move { i as i64 }).await;
         }
         total
     });
@@ -40,7 +40,7 @@ fn arduous_recursive_runtime_creation() {
 
 #[test]
 fn arduous_concurrent_runtime_creation() {
-    let threads = available_threads().min(8).max(2);
+    let threads = available_threads().clamp(2, 8);
     let mut handles = Vec::new();
     for i in 0..threads {
         handles.push(std::thread::spawn(move || {
@@ -86,7 +86,7 @@ fn arduous_massive_task_spawn() {
 
 #[test]
 fn arduous_cross_runtime_channel_stress() {
-    let depth = available_threads().min(8).max(2);
+    let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let tasks_per = 100usize;
     let (tx, mut rx) = mpsc::channel::<i64>(1024);
@@ -114,10 +114,12 @@ fn arduous_cross_runtime_channel_stress() {
         vals
     });
 
-    // Await producers (best-effort).
-    for h in producer_handles {
-        let _ = h; // JoinHandles dropped; tasks already scheduled.
-    }
+    // Every send completed (the channel closed after all values were received).
+    consumer_rt.block_on(async {
+        for h in producer_handles {
+            h.await.unwrap();
+        }
+    });
 
     let mut total = 0i64;
     for v in &received {
@@ -144,7 +146,7 @@ fn arduous_cross_runtime_channel_stress() {
 
 #[test]
 fn arduous_shared_state_mutex() {
-    let depth = available_threads().min(8).max(2);
+    let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let counter = Arc::new(Mutex::new(0i64));
     let tasks_per = 50usize;
@@ -176,7 +178,7 @@ fn arduous_shared_state_mutex() {
 
 #[test]
 fn arduous_barrier_sync() {
-    let depth = available_threads().min(8).max(2);
+    let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let barrier = Arc::new(Barrier::new(depth));
     let mut handles = Vec::new();
@@ -286,7 +288,7 @@ fn arduous_reentrancy_under_load() {
 
 #[test]
 fn arduous_high_fanout() {
-    let depth = available_threads().min(8).max(2);
+    let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let tasks_per = 64usize;
     let mut handles = Vec::new();
@@ -347,7 +349,7 @@ fn arduous_randomized_delays_deterministic() {
 
 #[test]
 fn arduous_broadcast_across_runtimes() {
-    let depth = available_threads().min(8).max(2);
+    let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let (tx, _) = broadcast::channel::<i64>(1024);
     let mut rxs = Vec::new();
@@ -619,16 +621,16 @@ fn arduous_nested_timeouts() {
     let rt = named_runtime("arduous_nested_timeouts");
     let result = rt.block_on(async {
         // Outer timeout wraps an inner timeout that fires first.
-        let outer = timeout(Duration::from_millis(200), async {
-            let inner = timeout(Duration::from_millis(50), async {
+        
+        timeout(Duration::from_millis(200), async {
+            
+            timeout(Duration::from_millis(50), async {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 1i64
             })
-            .await;
-            inner
+            .await
         })
-        .await;
-        outer
+        .await
     });
     banner(&format!("[arduous nested_timeouts] result={:?}", result));
     assert!(result.is_ok());
@@ -714,7 +716,7 @@ fn arduous_channel_closed_detection() {
 fn arduous_multi_thread_spawning() {
     let rt = named_runtime("arduous_multi_thread_spawn");
     let handle = rt.handle().clone();
-    let threads = available_threads().min(8).max(2);
+    let threads = available_threads().clamp(2, 8);
     let per_thread = 100usize;
     let mut join_handles = Vec::new();
     for t in 0..threads {
@@ -871,20 +873,20 @@ fn arduous_deadline_cascade() {
     let rt = named_runtime("arduous_deadline_cascade");
     let result = rt.block_on(async {
         // Three nested timeouts; innermost completes in time, middle allows, outer allows.
-        let r = timeout(Duration::from_millis(200), async {
-            let r2 = timeout(Duration::from_millis(150), async {
-                let r3 = timeout(Duration::from_millis(100), async {
+        
+        timeout(Duration::from_millis(200), async {
+            
+            timeout(Duration::from_millis(150), async {
+                
+                timeout(Duration::from_millis(100), async {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     7i64
                 })
-                .await;
-                r3
+                .await
             })
-            .await;
-            r2
+            .await
         })
-        .await;
-        r
+        .await
     });
     banner(&format!("[arduous deadline_cascade] result={:?}", result));
     assert_eq!(result.unwrap().unwrap().unwrap(), 7);
@@ -893,7 +895,7 @@ fn arduous_deadline_cascade() {
 #[test]
 fn arduous_idempotent_named_runtime() {
     let name = "arduous_idempotent_shared";
-    let threads = available_threads().min(8).max(2);
+    let threads = available_threads().clamp(2, 8);
     let mut handles = Vec::new();
     for _ in 0..threads {
         handles.push(std::thread::spawn(move || {
@@ -915,7 +917,7 @@ fn arduous_idempotent_named_runtime() {
 #[test]
 fn arduous_atomic_counter_cross_runtime() {
     use std::sync::atomic::{AtomicU64, Ordering};
-    let depth = available_threads().min(8).max(2);
+    let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let counter = Arc::new(AtomicU64::new(0));
     let tasks_per = 100usize;
@@ -946,7 +948,7 @@ fn arduous_atomic_counter_cross_runtime() {
 
 #[test]
 fn arduous_fanin_bounded_channel() {
-    let depth = available_threads().min(8).max(2);
+    let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let tasks_per = 50usize;
     let (tx, mut rx) = mpsc::channel::<i64>(64);
@@ -978,9 +980,12 @@ fn arduous_fanin_bounded_channel() {
         (count, total)
     });
 
-    for p in producers {
-        let _ = p; // already completed by channel close
-    }
+    // Channel closed only after every producer finished sending.
+    rt0.block_on(async {
+        for p in producers {
+            p.await.unwrap();
+        }
+    });
 
     let mut expected = 0i64;
     for ri in 0..depth {
@@ -1002,7 +1007,7 @@ fn arduous_fanin_bounded_channel() {
 
 #[test]
 fn arduous_broadcast_fanout() {
-    let depth = available_threads().min(8).max(2);
+    let depth = available_threads().clamp(2, 8);
     let runtimes = nested_chain(depth);
     let (tx, _) = broadcast::channel::<i64>(1024);
     let mut rxs: Vec<_> = (0..depth).map(|_| tx.subscribe()).collect();
@@ -1051,11 +1056,10 @@ fn arduous_nested_task_cancellation() {
         }
         let mut cancelled = 0usize;
         for h in handles {
-            if let Err(e) = h.await {
-                if e.is_cancelled() {
+            if let Err(e) = h.await
+                && e.is_cancelled() {
                     cancelled += 1;
                 }
-            }
         }
         cancelled
     });
@@ -1198,7 +1202,7 @@ fn arduous_deep_async_recursion() {
 fn arduous_runtime_handle_clone_stress() {
     let rt = named_runtime("arduous_handle_clone_stress");
     let base = rt.handle().clone();
-    let threads = available_threads().min(8).max(2);
+    let threads = available_threads().clamp(2, 8);
     let per_thread = 50usize;
     let mut join_handles = Vec::new();
     for t in 0..threads {
