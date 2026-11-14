@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `admission` feature, phase B0 (implies `governance`): per-pattern
+  `AdmissionConfig` (priority, concurrency budget, sheddable) via
+  `set_admission`; runtime handles resolve to admission keys at creation
+  per ADR-0001. Load shedding and `try_run` land in B1.
+
 ## [0.8.2] - 2026-11-13
 
 ### Fixed

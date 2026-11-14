@@ -27,6 +27,9 @@ governance = ["explicit_name", "glob_support"]
 # Declarative policy loading (TOML). Implies governance; pulls in
 # serde/toml, kept out of the base dependency tree.
 policy-toml = ["governance", "dep:serde", "dep:toml"]
+# Work admission on try_run (priorities, load shedding, concurrency
+# budgets). See docs/admission-control-plan.md.
+admission = ["governance"]
 
 [dependencies]
 console-subscriber = { version = "0.4", optional = true }

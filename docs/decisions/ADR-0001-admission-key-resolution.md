@@ -1,6 +1,6 @@
 # ADR-0001: Admission key resolution
 
-Status: proposed (awaiting ratification)
+Status: accepted (ratified; implemented in B0)
 
 ## Context
 

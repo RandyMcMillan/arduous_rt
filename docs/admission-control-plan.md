@@ -30,7 +30,7 @@ layer is the novel combination — nobody else on crates.io has it.
 - `run()` itself never changes behavior; admission lives in a new
   `try_run` family. Existing callers are untouched forever.
 
-## Phase B0 — foundations (v0.9)
+## Phase B0 — foundations (v0.9) ✅ implemented (unreleased)
 
 Admission keys and configuration, no behavior change yet.
 

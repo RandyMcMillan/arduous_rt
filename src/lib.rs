@@ -39,7 +39,10 @@
 //! `RuntimeConfig` (worker count, thread names via `allow_configured`)
 //! and thread budgets (`set_thread_quota`) shape the actual resource
 //! footprint, and `audit_events` exposes a ring buffer of the last 256
-//! governance decisions.
+//! governance decisions. The `admission` feature (implies `governance`)
+//! adds work admission: admission keys resolve per runtime at creation,
+//! and `set_admission` configures per-pattern priorities and concurrency
+//! budgets — see `docs/admission-control-plan.md`.
 //!
 //! # Nested chains
 //!
@@ -260,6 +263,14 @@ struct Registry {
     /// quota recomputation after `set_policy`.
     #[cfg(feature = "governance")]
     workers: HashMap<String, usize>,
+    /// Leaked-runtime address -> admission key (matched pattern, or "*"),
+    /// for O(1) admission-key resolution in try_run. Sound because
+    /// registry runtimes are never moved or freed (see ADR-0001).
+    #[cfg(feature = "admission")]
+    by_ptr: HashMap<usize, String>,
+    /// Admission configuration per pattern.
+    #[cfg(feature = "admission")]
+    admissions: HashMap<String, AdmissionConfig>,
 }
 
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
@@ -285,6 +296,10 @@ static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
         thread_counts: HashMap::new(),
         #[cfg(feature = "governance")]
         workers: HashMap::new(),
+        #[cfg(feature = "admission")]
+        by_ptr: HashMap::new(),
+        #[cfg(feature = "admission")]
+        admissions: HashMap::new(),
     })
 });
 
@@ -523,6 +538,10 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
         audit(AuditKind::Created, name, Some(matched.clone()));
         tracing::info!(name, matched, count, "named_runtime created");
     }
+    #[cfg(feature = "admission")]
+    guard
+        .by_ptr
+        .insert(leaked as *const _ as usize, matched.clone());
     #[cfg(not(feature = "governance"))]
     tracing::info!("named_runtime({name}) created");
     Ok(leaked)
@@ -1120,6 +1139,102 @@ fn check_thread_budget(
         }
     }
     Ok(())
+}
+
+/// How valuable a domain's work is when the process is overloaded.
+/// Requires the `admission` feature. Unconfigured domains default to
+/// `Medium` (shed only at `Load::Critical`).
+#[cfg(feature = "admission")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Priority {
+    Critical,
+    High,
+    #[default]
+    Medium,
+    Low,
+}
+
+/// Admission behavior for runtimes created through a pattern. Requires
+/// the `admission` feature.
+#[cfg(feature = "admission")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdmissionConfig {
+    /// Shed order under load: lower priority sheds first.
+    pub priority: Priority,
+    /// Maximum concurrently admitted `try_run` executions through this
+    /// pattern. `None` means unbounded (enforced in phase B2).
+    pub concurrency: Option<usize>,
+    /// Whether `Load::High` may shed this domain. `false` defers
+    /// shedding to `Load::Critical` regardless of priority.
+    pub sheddable: bool,
+}
+
+#[cfg(feature = "admission")]
+impl Default for AdmissionConfig {
+    fn default() -> Self {
+        Self {
+            priority: Priority::default(),
+            concurrency: None,
+            sheddable: true,
+        }
+    }
+}
+
+#[cfg(feature = "admission")]
+impl AdmissionConfig {
+    /// Builder-style setter for `priority`.
+    pub fn with_priority(mut self, priority: Priority) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    /// Builder-style setter for `concurrency`.
+    pub fn with_concurrency(mut self, n: usize) -> Self {
+        self.concurrency = Some(n);
+        self
+    }
+
+    /// Builder-style setter for `sheddable`.
+    pub fn with_sheddable(mut self, sheddable: bool) -> Self {
+        self.sheddable = sheddable;
+        self
+    }
+}
+
+/// Configure admission for runtimes created through `pattern`. Requires
+/// the `admission` feature. Like the other shaping APIs this is
+/// imperative — the TOML policy covers allow/deny/quota only.
+///
+/// # Errors
+///
+/// Returns `NameError::InvalidPattern` when `pattern` is not a valid glob.
+#[cfg(feature = "admission")]
+pub fn set_admission(pattern: &str, config: AdmissionConfig) -> Result<(), NameError> {
+    validate_glob(pattern)?;
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    guard.admissions.insert(pattern.to_string(), config);
+    Ok(())
+}
+
+/// Resolve a runtime handle to its admission key (matched pattern, or
+/// "*" for anything unknown). O(1) via the creation-time pointer map;
+/// see ADR-0001 for the address-stability argument.
+#[cfg(feature = "admission")]
+#[allow(dead_code)] // consumed by the try_run family in phase B1
+fn admission_key(reg: &Registry, rt: &tokio::runtime::Runtime) -> String {
+    reg.by_ptr
+        .get(&(rt as *const _ as usize))
+        .cloned()
+        .unwrap_or_else(|| "*".to_string())
+}
+
+/// The admission configuration governing `rt`, or the defaults for
+/// unconfigured keys.
+#[cfg(feature = "admission")]
+#[allow(dead_code)] // consumed by the try_run family in phase B1
+fn admission_config(reg: &Registry, rt: &tokio::runtime::Runtime) -> AdmissionConfig {
+    let key = admission_key(reg, rt);
+    reg.admissions.get(&key).copied().unwrap_or_default()
 }
 
 /// Create (or reuse) a child runtime scoped under a parent runtime name.
@@ -1816,6 +1931,47 @@ mod tests {
                 .iter()
                 .any(|e| e.kind == AuditKind::RejectedDenied && e.name == "aud_demo.blocked.x")
         );
+    }
+
+    #[cfg(feature = "admission")]
+    #[test]
+    fn admission_set_admission_validates_and_stores() {
+        allow_test_names();
+        assert!(
+            set_admission(
+                "adm_demo.*",
+                AdmissionConfig::default().with_priority(Priority::Low)
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            set_admission("adm_demo.[bad", AdmissionConfig::default()),
+            Err(NameError::InvalidPattern(_))
+        ));
+    }
+
+    #[cfg(feature = "admission")]
+    #[test]
+    fn admission_records_runtime_key_at_creation() {
+        allow_test_names();
+        allow_name("adm_key.*").unwrap();
+        let rt = try_named_runtime("adm_key.pool").unwrap();
+        let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        let key = guard
+            .by_ptr
+            .get(&(rt as *const _ as usize))
+            .expect("runtime must have an admission key");
+        assert_eq!(key, "adm_key.*");
+        assert!(!guard.admissions.contains_key("adm_key.*"));
+        drop(guard);
+        set_admission(
+            "adm_key.*",
+            AdmissionConfig::default().with_priority(Priority::High),
+        )
+        .unwrap();
+        let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        let config = crate::admission_config(&guard, rt);
+        assert_eq!(config.priority, Priority::High);
     }
 
     // Negative tests: pass when the expected failure occurs.

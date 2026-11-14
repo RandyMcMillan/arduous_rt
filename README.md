@@ -146,6 +146,7 @@ Runs `f` repeatedly and logs min/avg/max timings.
 - `glob_support` — implies `explicit_name`; allowlist entries may be glob patterns such as `org.gnostr.*` or `org.gnostr.*-debug`. Hierarchy note: `/` separates levels, so `org.gnostr/*` matches one level while `org.gnostr/**` matches a whole subtree — its root included.
 - `governance` — implies both filters; adds deny rules that override allows (`deny_name`), per-pattern quotas (`set_quota`, `NameError::QuotaExceeded`), introspection (`registered_patterns`, `list_runtimes`), domain tokens (`DomainToken` + `named_runtime_in` + `DomainToken::mint` for sub-domains), atomic policy swaps (`set_policy`), per-pattern runtime configs (`allow_configured` — worker counts, thread names), thread budgets (`set_thread_quota`, `NameError::ThreadBudgetExceeded`), a 256-event audit log (`audit_events`), and structured tracing events on governance decisions.
 - `policy-toml` — implies `governance`; loads a `Policy` from a TOML document (`policy_from_toml`), keeping serde/toml out of the base dependency tree.
+- `admission` — implies `governance`; domain-aware work admission: per-pattern priorities and concurrency budgets via `set_admission`, resolved per runtime at creation. Load shedding lands next (see `docs/admission-control-plan.md`).
 
 Requires the `glob_support` feature:
 
