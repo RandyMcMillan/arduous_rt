@@ -99,20 +99,16 @@ Admission keys and configuration, no behavior change yet.
 - README section + comparison-table row ("domain-aware admission
   control").
 
-## Decision points to resolve before B0
+## Decision points — resolved as ADRs (status: proposed)
 
-1. **Key resolution:** runtime-pointer map (automatic, O(1), requires
-   the address-stability argument) vs. requiring names at admission
-   time (`try_run_named`). Proposal: pointer map primary, name-taking
-   variants as sugar later.
-2. **Priority default for unconfigured domains:** `Medium` (sheddable
-   at Critical) — safe default, or `High` (never shed until everything
-   else is gone)?
-3. **Shed audit flood threshold:** 64/second proposal — tune from the
-   gnostr demo.
-4. **Does admission apply to the inline path?** Proposal: yes — a
-   reentrant `try_run` on an overloaded system should also shed; the
-   inline path is just execution after admission.
+1. Key resolution: runtime-pointer map primary, name-taking sugar
+   later — `docs/decisions/ADR-0001-admission-key-resolution.md`.
+2. Priority default for unconfigured domains: `Medium` —
+   `docs/decisions/ADR-0002-default-priority.md`.
+3. Shed audit flood threshold: 64/s with collapse, tuned from demo
+   data — `docs/decisions/ADR-0003-shed-audit-flood-threshold.md`.
+4. Admission on the inline path: yes, both paths —
+   `docs/decisions/ADR-0004-inline-path-admission.md`.
 
 ## Compatibility
 
