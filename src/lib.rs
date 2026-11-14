@@ -2363,6 +2363,34 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "admission")]
+    #[test]
+    fn admission_shed_collapse_event_records_dropped_count() {
+        let _guard = load_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let rt = shed_test_runtime(
+            "collapse",
+            AdmissionConfig::default().with_priority(Priority::Low),
+        );
+        report_load(Load::High);
+        for _ in 0..(SHED_AUDIT_MAX_PER_SEC + 50) {
+            let _ = rt.block_on(try_run(rt, async { 1 }));
+        }
+        // Rotate the one-second window, then trigger one more shed; the
+        // collapsed count from the first window must flush on rotation.
+        // Assert on the guard's internal state: the shared audit ring is
+        // written by every test in the binary, so ring-content assertions
+        // here would race eviction.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let _ = rt.block_on(try_run(rt, async { 1 }));
+        report_load(Load::Normal);
+        let state = SHED_AUDIT.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(state.count, 1, "one shed recorded in the fresh window");
+        assert_eq!(
+            state.collapsed, 0,
+            "collapsed count must flush (and reset) on window rotation"
+        );
+    }
+
     /// Spawn a `try_run` that acquires its permit, signals through the
     /// returned channel, then parks forever. The receiver fires only
     /// after the permit is held, so exhaustion tests are deterministic.
