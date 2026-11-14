@@ -83,7 +83,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
-use std::sync::{Arc, LazyLock, Mutex};
+#[cfg(feature = "admission")]
+use std::sync::Arc;
+use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
 #[doc(hidden)]
