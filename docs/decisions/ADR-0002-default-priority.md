@@ -1,6 +1,6 @@
 # ADR-0002: Default priority for unconfigured domains
 
-Status: proposed (awaiting ratification)
+Status: accepted (ratified; implemented in B1)
 
 ## Context
 

@@ -1,6 +1,6 @@
 # ADR-0004: Admission on the inline execution path
 
-Status: proposed (awaiting ratification)
+Status: accepted (ratified; implemented in B1)
 
 ## Context
 

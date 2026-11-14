@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AdmissionConfig` (priority, concurrency budget, sheddable) via
   `set_admission`; runtime handles resolve to admission keys at creation
   per ADR-0001. Load shedding and `try_run` land in B1.
+- `admission` feature, phase B1: `Load` signal (`report_load`), `try_run`
+  with priority-class shedding on both execution paths (ADR-0004),
+  `AdmissionError::Shed`, and flood-guarded shed auditing
+  (64/s, `ShedCollapsed`, ADR-0003). ADR-0002's Medium default verified
+  by test.
 
 ## [0.8.2] - 2026-11-13
 

@@ -1,6 +1,6 @@
 # ADR-0003: Shed-audit flood threshold
 
-Status: proposed (awaiting ratification)
+Status: accepted (ratified; implemented in B1)
 
 ## Context
 

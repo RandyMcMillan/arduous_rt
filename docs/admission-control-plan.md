@@ -51,7 +51,7 @@ Admission keys and configuration, no behavior change yet.
   this is a scope expansion and opts in explicitly.
 - No `try_run` yet; B0 compiles and resolves keys only.
 
-## Phase B1 — load signal and shedding (v0.9)
+## Phase B1 — load signal and shedding (v0.9) ✅ implemented (unreleased)
 
 - **Host-fed load signal**, deliberately minimal:
   ```rust

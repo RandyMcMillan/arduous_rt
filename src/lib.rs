@@ -1045,6 +1045,13 @@ pub enum AuditKind {
     RejectedThreadBudget,
     /// Rejected: the name escaped the presented token's domain.
     RejectedOutsideDomain,
+    /// A `try_run` execution was shed under load. Requires `admission`.
+    #[cfg(feature = "admission")]
+    Shed,
+    /// Shed events collapsed by the flood guard (ADR-0003): the note
+    /// carries how many. Requires `admission`.
+    #[cfg(feature = "admission")]
+    ShedCollapsed,
 }
 
 /// One entry of the governance audit log. Requires `governance`.
@@ -1059,6 +1066,9 @@ pub struct AuditEvent {
     pub name: String,
     /// The pattern that authorized or rejected the name, if any.
     pub pattern: Option<String>,
+    /// Free-form detail (e.g. shed priority/load). Requires `admission`.
+    #[cfg(feature = "admission")]
+    pub note: Option<String>,
 }
 
 #[cfg(feature = "governance")]
@@ -1070,16 +1080,34 @@ static AUDIT: LazyLock<Mutex<std::collections::VecDeque<AuditEvent>>> =
 
 #[cfg(feature = "governance")]
 fn audit(kind: AuditKind, name: &str, pattern: Option<String>) {
-    let mut log = AUDIT.lock().unwrap_or_else(|e| e.into_inner());
-    if log.len() >= AUDIT_CAP {
-        log.pop_front();
-    }
-    log.push_back(AuditEvent {
+    push_audit(AuditEvent {
         when: std::time::SystemTime::now(),
         kind,
         name: name.to_string(),
         pattern,
+        #[cfg(feature = "admission")]
+        note: None,
     });
+}
+
+#[cfg(feature = "admission")]
+fn audit_with_note(kind: AuditKind, name: &str, pattern: Option<String>, note: String) {
+    push_audit(AuditEvent {
+        when: std::time::SystemTime::now(),
+        kind,
+        name: name.to_string(),
+        pattern,
+        note: Some(note),
+    });
+}
+
+#[cfg(feature = "governance")]
+fn push_audit(event: AuditEvent) {
+    let mut log = AUDIT.lock().unwrap_or_else(|e| e.into_inner());
+    if log.len() >= AUDIT_CAP {
+        log.pop_front();
+    }
+    log.push_back(event);
 }
 
 /// The governance audit log, oldest first, capped at 256 events. Requires
@@ -1220,7 +1248,6 @@ pub fn set_admission(pattern: &str, config: AdmissionConfig) -> Result<(), NameE
 /// "*" for anything unknown). O(1) via the creation-time pointer map;
 /// see ADR-0001 for the address-stability argument.
 #[cfg(feature = "admission")]
-#[allow(dead_code)] // consumed by the try_run family in phase B1
 fn admission_key(reg: &Registry, rt: &tokio::runtime::Runtime) -> String {
     reg.by_ptr
         .get(&(rt as *const _ as usize))
@@ -1231,10 +1258,149 @@ fn admission_key(reg: &Registry, rt: &tokio::runtime::Runtime) -> String {
 /// The admission configuration governing `rt`, or the defaults for
 /// unconfigured keys.
 #[cfg(feature = "admission")]
-#[allow(dead_code)] // consumed by the try_run family in phase B1
 fn admission_config(reg: &Registry, rt: &tokio::runtime::Runtime) -> AdmissionConfig {
     let key = admission_key(reg, rt);
     reg.admissions.get(&key).copied().unwrap_or_default()
+}
+
+/// Process load as reported by the host. Requires `admission`.
+#[cfg(feature = "admission")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Load {
+    Normal,
+    High,
+    Critical,
+}
+
+#[cfg(feature = "admission")]
+const LOAD_NORMAL: u8 = 0;
+#[cfg(feature = "admission")]
+const LOAD_HIGH: u8 = 1;
+#[cfg(feature = "admission")]
+const LOAD_CRITICAL: u8 = 2;
+
+#[cfg(feature = "admission")]
+static CURRENT_LOAD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(LOAD_NORMAL);
+
+/// Report the process load. The host derives it however it likes (CPU,
+/// latency, queue depth) and calls this from its own loop; arduous_rt
+/// never guesses at health. Requires `admission`.
+#[cfg(feature = "admission")]
+pub fn report_load(load: Load) {
+    let value = match load {
+        Load::Normal => LOAD_NORMAL,
+        Load::High => LOAD_HIGH,
+        Load::Critical => LOAD_CRITICAL,
+    };
+    CURRENT_LOAD.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(feature = "admission")]
+fn current_load() -> Load {
+    match CURRENT_LOAD.load(std::sync::atomic::Ordering::Relaxed) {
+        LOAD_HIGH => Load::High,
+        LOAD_CRITICAL => Load::Critical,
+        _ => Load::Normal,
+    }
+}
+
+/// Whether `config` sheds at `load`. `High` sheds sheddable Low-priority
+/// domains; `Critical` sheds Low and Medium. Unconfigured domains are
+/// Medium and therefore survive `High` (ADR-0002).
+#[cfg(feature = "admission")]
+fn should_shed(config: AdmissionConfig, load: Load) -> bool {
+    match load {
+        Load::Normal => false,
+        Load::High => config.sheddable && config.priority == Priority::Low,
+        Load::Critical => matches!(config.priority, Priority::Low | Priority::Medium),
+    }
+}
+
+/// Why `try_run` refused to execute work. Requires `admission`.
+#[cfg(feature = "admission")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdmissionError {
+    /// The work was shed under load; retry later or degrade gracefully.
+    Shed {
+        /// The domain's configured priority.
+        priority: Priority,
+        /// The load level that tripped the shed.
+        load: Load,
+    },
+    /// The domain's concurrency budget is fully occupied.
+    ConcurrencyExhausted,
+}
+
+#[cfg(feature = "admission")]
+impl fmt::Display for AdmissionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Shed { priority, load } => write!(
+                f,
+                "work shed at {load:?} load (priority {priority:?})\n\
+                 hint: retry later, lower the domain's priority class, or have the caller degrade gracefully"
+            ),
+            Self::ConcurrencyExhausted => write!(
+                f,
+                "admission concurrency budget exhausted\n\
+                 hint: retry later or raise the budget with arduous_rt::set_admission"
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "admission")]
+impl std::error::Error for AdmissionError {}
+
+/// Shed events allowed into the audit ring per second; beyond this they
+/// collapse into one `ShedCollapsed` entry (ADR-0003).
+#[cfg(feature = "admission")]
+const SHED_AUDIT_MAX_PER_SEC: usize = 64;
+
+#[cfg(feature = "admission")]
+struct ShedAuditState {
+    window: std::time::Instant,
+    count: usize,
+    collapsed: usize,
+}
+
+#[cfg(feature = "admission")]
+static SHED_AUDIT: LazyLock<Mutex<ShedAuditState>> = LazyLock::new(|| {
+    Mutex::new(ShedAuditState {
+        window: std::time::Instant::now(),
+        count: 0,
+        collapsed: 0,
+    })
+});
+
+#[cfg(feature = "admission")]
+fn audit_shed(key: &str, config: AdmissionConfig, load: Load) {
+    let mut state = SHED_AUDIT.lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    if now.duration_since(state.window) >= std::time::Duration::from_secs(1) {
+        if state.collapsed > 0 {
+            audit_with_note(
+                AuditKind::ShedCollapsed,
+                key,
+                None,
+                format!("{} shed events collapsed", state.collapsed),
+            );
+        }
+        state.window = now;
+        state.count = 0;
+        state.collapsed = 0;
+    }
+    if state.count < SHED_AUDIT_MAX_PER_SEC {
+        state.count += 1;
+        audit_with_note(
+            AuditKind::Shed,
+            key,
+            None,
+            format!("priority={:?} load={:?}", config.priority, load),
+        );
+    } else {
+        state.collapsed += 1;
+    }
 }
 
 /// Create (or reuse) a child runtime scoped under a parent runtime name.
@@ -1303,6 +1469,53 @@ pub fn is_running_on(rt: &'static tokio::runtime::Runtime) -> bool {
 /// assert_eq!(value, 42);
 /// ```
 pub async fn run<R, F>(rt: &'static tokio::runtime::Runtime, fut: F) -> R
+where
+    R: Send + 'static,
+    F: Future<Output = R> + Send + 'static,
+{
+    execute_on(rt, fut).await
+}
+
+/// Run a future on `rt` after admission checks. Identical execution to
+/// [`run`] — inline when already on `rt`, spawned otherwise — but first
+/// consults the domain's admission configuration: sheddable domains are
+/// rejected with [`AdmissionError::Shed`] under a reported load, and
+/// (from phase B2) concurrency budgets are enforced before executing.
+/// Requires the `admission` feature.
+///
+/// Shedding applies to both execution paths, including the inline one:
+/// a reentrant caller still occupies a worker, and a context-based
+/// bypass would make the policy gameable (ADR-0004).
+///
+/// # Errors
+///
+/// Returns [`AdmissionError::Shed`] when the host has reported a load
+/// level that sheds this domain's priority class.
+#[cfg(feature = "admission")]
+pub async fn try_run<R, F>(
+    rt: &'static tokio::runtime::Runtime,
+    fut: F,
+) -> Result<R, AdmissionError>
+where
+    R: Send + 'static,
+    F: Future<Output = R> + Send + 'static,
+{
+    let (config, key) = {
+        let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        (admission_config(&guard, rt), admission_key(&guard, rt))
+    };
+    let load = current_load();
+    if should_shed(config, load) {
+        audit_shed(&key, config, load);
+        return Err(AdmissionError::Shed {
+            priority: config.priority,
+            load,
+        });
+    }
+    Ok(execute_on(rt, fut).await)
+}
+
+async fn execute_on<R, F>(rt: &'static tokio::runtime::Runtime, fut: F) -> R
 where
     R: Send + 'static,
     F: Future<Output = R> + Send + 'static,
@@ -1972,6 +2185,107 @@ mod tests {
         let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
         let config = crate::admission_config(&guard, rt);
         assert_eq!(config.priority, Priority::High);
+    }
+
+    #[cfg(feature = "admission")]
+    fn load_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    #[cfg(feature = "admission")]
+    fn shed_test_runtime(
+        suffix: &str,
+        config: AdmissionConfig,
+    ) -> &'static tokio::runtime::Runtime {
+        allow_test_names();
+        let pattern = format!("shed_{suffix}.*");
+        allow_name(&pattern).unwrap();
+        set_admission(&pattern, config).unwrap();
+        try_named_runtime(&format!("shed_{suffix}.rt")).unwrap()
+    }
+
+    #[cfg(feature = "admission")]
+    #[test]
+    fn admission_sheds_low_priority_at_high_load() {
+        let _guard = load_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let rt = shed_test_runtime(
+            "low",
+            AdmissionConfig::default().with_priority(Priority::Low),
+        );
+        report_load(Load::High);
+        let result = rt.block_on(try_run(rt, async { 1 }));
+        assert!(matches!(
+            result,
+            Err(AdmissionError::Shed {
+                priority: Priority::Low,
+                load: Load::High
+            })
+        ));
+        report_load(Load::Normal);
+        assert_eq!(rt.block_on(try_run(rt, async { 2 })).unwrap(), 2);
+    }
+
+    #[cfg(feature = "admission")]
+    #[test]
+    fn admission_medium_survives_high_sheds_at_critical() {
+        let _guard = load_lock().lock().unwrap_or_else(|e| e.into_inner());
+        // Medium = the default for unconfigured domains (ADR-0002).
+        let rt = shed_test_runtime("med", AdmissionConfig::default());
+        report_load(Load::High);
+        assert_eq!(rt.block_on(try_run(rt, async { 1 })).unwrap(), 1);
+        report_load(Load::Critical);
+        assert!(matches!(
+            rt.block_on(try_run(rt, async { 1 })),
+            Err(AdmissionError::Shed {
+                priority: Priority::Medium,
+                load: Load::Critical
+            })
+        ));
+        report_load(Load::Normal);
+    }
+
+    #[cfg(feature = "admission")]
+    #[test]
+    fn admission_not_sheddable_defers_high_to_critical() {
+        let _guard = load_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let rt = shed_test_runtime(
+            "sticky",
+            AdmissionConfig::default()
+                .with_priority(Priority::Low)
+                .with_sheddable(false),
+        );
+        report_load(Load::High);
+        assert_eq!(rt.block_on(try_run(rt, async { 1 })).unwrap(), 1);
+        report_load(Load::Critical);
+        assert!(matches!(
+            rt.block_on(try_run(rt, async { 1 })),
+            Err(AdmissionError::Shed { .. })
+        ));
+        report_load(Load::Normal);
+    }
+
+    #[cfg(feature = "admission")]
+    #[test]
+    fn admission_shed_audit_flood_guard_caps_events() {
+        let _guard = load_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let rt = shed_test_runtime(
+            "flood",
+            AdmissionConfig::default().with_priority(Priority::Low),
+        );
+        report_load(Load::High);
+        for _ in 0..(SHED_AUDIT_MAX_PER_SEC + 100) {
+            let _ = rt.block_on(try_run(rt, async { 1 }));
+        }
+        report_load(Load::Normal);
+        let shed_events = audit_events()
+            .iter()
+            .filter(|e| e.kind == AuditKind::Shed)
+            .count();
+        assert!(
+            shed_events <= SHED_AUDIT_MAX_PER_SEC,
+            "flood guard must cap shed audit events, saw {shed_events}"
+        );
     }
 
     // Negative tests: pass when the expected failure occurs.
