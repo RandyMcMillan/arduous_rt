@@ -83,7 +83,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
 #[doc(hidden)]
@@ -271,6 +271,11 @@ struct Registry {
     /// Admission configuration per pattern.
     #[cfg(feature = "admission")]
     admissions: HashMap<String, AdmissionConfig>,
+    /// Admission key -> (capacity, permit pool) for configured
+    /// concurrency budgets. The pool is replaced when the capacity
+    /// changes; in-flight permits keep the old pool alive.
+    #[cfg(feature = "admission")]
+    permits: HashMap<String, (usize, Arc<tokio::sync::Semaphore>)>,
 }
 
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
@@ -300,6 +305,8 @@ static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
         by_ptr: HashMap::new(),
         #[cfg(feature = "admission")]
         admissions: HashMap::new(),
+        #[cfg(feature = "admission")]
+        permits: HashMap::new(),
     })
 });
 
@@ -1263,6 +1270,26 @@ fn admission_config(reg: &Registry, rt: &tokio::runtime::Runtime) -> AdmissionCo
     reg.admissions.get(&key).copied().unwrap_or_default()
 }
 
+/// Acquire a concurrency permit for `key`, creating or resizing the pool
+/// to `capacity`. Non-blocking: `None` means the budget is fully
+/// occupied. Replacing the pool on resize is sound — in-flight permits
+/// hold the old `Arc` alive until they drop.
+#[cfg(feature = "admission")]
+fn admission_permit(
+    reg: &mut Registry,
+    key: &str,
+    capacity: usize,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    let entry = reg
+        .permits
+        .entry(key.to_string())
+        .or_insert_with(|| (capacity, Arc::new(tokio::sync::Semaphore::new(capacity))));
+    if entry.0 != capacity {
+        *entry = (capacity, Arc::new(tokio::sync::Semaphore::new(capacity)));
+    }
+    entry.1.clone().try_acquire_owned().ok()
+}
+
 /// Process load as reported by the host. Requires `admission`.
 #[cfg(feature = "admission")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1473,7 +1500,10 @@ where
     R: Send + 'static,
     F: Future<Output = R> + Send + 'static,
 {
-    execute_on(rt, fut).await
+    #[cfg(feature = "admission")]
+    return execute_on(rt, fut, None).await;
+    #[cfg(not(feature = "admission"))]
+    return execute_on(rt, fut).await;
 }
 
 /// Run a future on `rt` after admission checks. Identical execution to
@@ -1512,18 +1542,41 @@ where
             load,
         });
     }
-    Ok(execute_on(rt, fut).await)
+    let permit = match config.concurrency {
+        Some(capacity) => {
+            let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+            match admission_permit(&mut guard, &key, capacity) {
+                Some(permit) => Some(permit),
+                None => return Err(AdmissionError::ConcurrencyExhausted),
+            }
+        }
+        None => None,
+    };
+    Ok(execute_on(rt, fut, permit).await)
 }
 
-async fn execute_on<R, F>(rt: &'static tokio::runtime::Runtime, fut: F) -> R
+async fn execute_on<R, F>(
+    rt: &'static tokio::runtime::Runtime,
+    fut: F,
+    #[cfg(feature = "admission")] permit: Option<tokio::sync::OwnedSemaphorePermit>,
+) -> R
 where
     R: Send + 'static,
     F: Future<Output = R> + Send + 'static,
 {
+    // The permit (when present) is held across execution and released on
+    // completion or cancellation — cancellation-safe via guard drop on
+    // the inline path and via move-into-task on the spawn path.
+    #[cfg(feature = "admission")]
+    let _permit = permit;
     if is_running_on(rt) {
         fut.await
     } else {
-        let handle = rt.spawn(fut);
+        let handle = rt.spawn(async move {
+            #[cfg(feature = "admission")]
+            let _permit = _permit;
+            fut.await
+        });
         handle.await.expect("task panicked")
     }
 }
@@ -2286,6 +2339,59 @@ mod tests {
             shed_events <= SHED_AUDIT_MAX_PER_SEC,
             "flood guard must cap shed audit events, saw {shed_events}"
         );
+    }
+
+    /// Spawn a `try_run` that acquires its permit, signals through the
+    /// returned channel, then parks forever. The receiver fires only
+    /// after the permit is held, so exhaustion tests are deterministic.
+    #[cfg(feature = "admission")]
+    fn hold_permit(
+        rt: &'static tokio::runtime::Runtime,
+    ) -> tokio::task::JoinHandle<Result<(), AdmissionError>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = rt.spawn(try_run(rt, async move {
+            tx.send(()).expect("signal permit acquisition");
+            std::future::pending::<()>().await;
+        }));
+        rx.recv().expect("in-flight task must acquire its permit");
+        handle
+    }
+
+    #[cfg(feature = "admission")]
+    #[test]
+    fn admission_concurrency_budget_exhausts_then_recovers() {
+        let _guard = load_lock().lock().unwrap_or_else(|e| e.into_inner());
+        allow_test_names();
+        allow_name("budget.*").unwrap();
+        set_admission("budget.*", AdmissionConfig::default().with_concurrency(1)).unwrap();
+        let rt = try_named_runtime("budget.pool").unwrap();
+
+        let in_flight = hold_permit(rt);
+        let rejected = rt.block_on(try_run(rt, async { 2 }));
+        assert!(matches!(
+            rejected,
+            Err(AdmissionError::ConcurrencyExhausted)
+        ));
+        in_flight.abort();
+        let _ = rt.block_on(in_flight);
+        assert_eq!(rt.block_on(try_run(rt, async { 7 })).unwrap(), 7);
+    }
+
+    #[cfg(feature = "admission")]
+    #[test]
+    fn admission_cancellation_releases_the_permit() {
+        let _guard = load_lock().lock().unwrap_or_else(|e| e.into_inner());
+        allow_test_names();
+        allow_name("cancel.*").unwrap();
+        set_admission("cancel.*", AdmissionConfig::default().with_concurrency(1)).unwrap();
+        let rt = try_named_runtime("cancel.pool").unwrap();
+
+        let handle = hold_permit(rt);
+        handle.abort();
+        let _ = rt.block_on(handle);
+
+        // The aborted execution's permit must be back in the pool.
+        assert_eq!(rt.block_on(try_run(rt, async { 9 })).unwrap(), 9);
     }
 
     // Negative tests: pass when the expected failure occurs.

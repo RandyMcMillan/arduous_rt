@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AdmissionError::Shed`, and flood-guarded shed auditing
   (64/s, `ShedCollapsed`, ADR-0003). ADR-0002's Medium default verified
   by test.
+- `admission` feature, phase B2: per-key concurrency budgets enforced
+  via permit pools — non-blocking acquire, `ConcurrencyExhausted`
+  instead of queuing, cancellation-safe release on both execution
+  paths. tokio gains the `sync` feature (Semaphore).
 
 ## [0.8.2] - 2026-11-13
 

@@ -78,7 +78,7 @@ Admission keys and configuration, no behavior change yet.
   64 sheds occur within one second, collapse to a single
   `ShedCollapsed { count }` event.
 
-## Phase B2 — concurrency budgets (v0.9)
+## Phase B2 — concurrency budgets (v0.9) ✅ implemented (unreleased)
 
 - Per admission key, a bounded permit pool (`tokio::sync::Semaphore`).
   `try_run` acquires a permit before executing; the spawn path moves
