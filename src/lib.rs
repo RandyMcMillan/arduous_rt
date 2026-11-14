@@ -263,9 +263,11 @@ struct Registry {
     /// quota recomputation after `set_policy`.
     #[cfg(feature = "governance")]
     workers: HashMap<String, usize>,
-    /// Leaked-runtime address -> admission key (matched pattern, or "*"),
-    /// for O(1) admission-key resolution in try_run. Sound because
-    /// registry runtimes are never moved or freed (see ADR-0001).
+    /// Leaked-runtime address -> runtime name, for O(1) admission-key
+    /// resolution in try_run. Sound because registry runtimes are never
+    /// moved or freed (see ADR-0001). Admission lookup tries the name
+    /// first, then the name's matched allow pattern — pattern-only keys
+    /// proved too coarse in the gnostr demo.
     #[cfg(feature = "admission")]
     by_ptr: HashMap<usize, String>,
     /// Admission configuration per pattern.
@@ -548,7 +550,7 @@ pub fn try_named_runtime(name: &str) -> Result<&'static tokio::runtime::Runtime,
     #[cfg(feature = "admission")]
     guard
         .by_ptr
-        .insert(leaked as *const _ as usize, matched.clone());
+        .insert(leaked as *const _ as usize, name.to_string());
     #[cfg(not(feature = "governance"))]
     tracing::info!("named_runtime({name}) created");
     Ok(leaked)
@@ -1251,9 +1253,10 @@ pub fn set_admission(pattern: &str, config: AdmissionConfig) -> Result<(), NameE
     Ok(())
 }
 
-/// Resolve a runtime handle to its admission key (matched pattern, or
-/// "*" for anything unknown). O(1) via the creation-time pointer map;
-/// see ADR-0001 for the address-stability argument.
+/// Resolve a runtime handle to its admission key: the runtime's own
+/// name, falling back to "*" for unknown addresses. O(1) via the
+/// creation-time pointer map; see ADR-0001 (as amended) for the
+/// address-stability argument.
 #[cfg(feature = "admission")]
 fn admission_key(reg: &Registry, rt: &tokio::runtime::Runtime) -> String {
     reg.by_ptr
@@ -1262,12 +1265,20 @@ fn admission_key(reg: &Registry, rt: &tokio::runtime::Runtime) -> String {
         .unwrap_or_else(|| "*".to_string())
 }
 
-/// The admission configuration governing `rt`, or the defaults for
-/// unconfigured keys.
+/// The admission configuration governing `rt`: the most specific match
+/// wins — configuration registered for the runtime's own name first,
+/// then for its matched allow pattern, then the defaults
+/// (ADR-0002: unconfigured domains are Medium).
 #[cfg(feature = "admission")]
 fn admission_config(reg: &Registry, rt: &tokio::runtime::Runtime) -> AdmissionConfig {
-    let key = admission_key(reg, rt);
-    reg.admissions.get(&key).copied().unwrap_or_default()
+    let name = admission_key(reg, rt);
+    reg.admissions
+        .get(&name)
+        .copied()
+        .or_else(|| {
+            find_match(&reg.allowed, &name).and_then(|pattern| reg.admissions.get(pattern).copied())
+        })
+        .unwrap_or_default()
 }
 
 /// Acquire a concurrency permit for `key`, creating or resizing the pool
@@ -2227,9 +2238,10 @@ mod tests {
             .by_ptr
             .get(&(rt as *const _ as usize))
             .expect("runtime must have an admission key");
-        assert_eq!(key, "adm_key.*");
-        assert!(!guard.admissions.contains_key("adm_key.*"));
+        assert_eq!(key, "adm_key.pool");
+        assert!(!guard.admissions.contains_key("adm_key.pool"));
         drop(guard);
+        // Pattern-level configuration resolves through the name fallback.
         set_admission(
             "adm_key.*",
             AdmissionConfig::default().with_priority(Priority::High),
@@ -2238,6 +2250,16 @@ mod tests {
         let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
         let config = crate::admission_config(&guard, rt);
         assert_eq!(config.priority, Priority::High);
+        // Name-level configuration is more specific and wins.
+        drop(guard);
+        set_admission(
+            "adm_key.pool",
+            AdmissionConfig::default().with_priority(Priority::Low),
+        )
+        .unwrap();
+        let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        let config = crate::admission_config(&guard, rt);
+        assert_eq!(config.priority, Priority::Low);
     }
 
     #[cfg(feature = "admission")]

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Admission resolves by runtime name first, falling back to the name's
+  matched allow pattern (ADR-0001, amendment 1). Pattern-only keys were
+  too coarse — one `org.gnostr/**` allow pattern covered every
+  subsystem, making per-subsystem priorities inexpressible. Found by
+  the gnostr admission demo, which now passes end to end.
+
 ### Added
 
 - `admission` feature, phase B0 (implies `governance`): per-pattern

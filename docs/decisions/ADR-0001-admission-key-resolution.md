@@ -30,6 +30,15 @@ not names, so every call site pays a lookup and a new failure mode
 
 A, with C's sugar deferred until a real caller asks for it.
 
+## Amendment 1 (post-implementation, from the gnostr demo)
+
+The map records the runtime's **name**, not its matched pattern.
+Admission lookup tries the name first and falls back to the name's
+matched allow pattern. Rationale: pattern-only keys proved too coarse —
+one `org.gnostr/**` allow pattern covered every subsystem, making
+per-subsystem priorities (core High, crawler Low) inexpressible. The
+address-stability argument is unchanged.
+
 ## Consequences
 
 The registry gains one `HashMap<usize, String>` written once per
