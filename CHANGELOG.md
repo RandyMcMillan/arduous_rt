@@ -7,20 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Admission resolves by runtime name first, falling back to the name's
-  matched allow pattern (ADR-0001, amendment 1). Pattern-only keys were
-  too coarse — one `org.gnostr/**` allow pattern covered every
-  subsystem, making per-subsystem priorities inexpressible. Found by
-  the gnostr admission demo, which now passes end to end.
+## [0.9.0] - 2026-11-13
 
 ### Added
 
-- `admission` feature, phase B0 (implies `governance`): per-pattern
+- `admission` feature (phase B0, implies `governance`): per-pattern
   `AdmissionConfig` (priority, concurrency budget, sheddable) via
   `set_admission`; runtime handles resolve to admission keys at creation
-  per ADR-0001. Load shedding and `try_run` land in B1.
+  per ADR-0001 (as amended). Load shedding and `try_run` land in B1.
 - `admission` feature, phase B1: `Load` signal (`report_load`), `try_run`
   with priority-class shedding on both execution paths (ADR-0004),
   `AdmissionError::Shed`, and flood-guarded shed auditing
@@ -30,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   via permit pools — non-blocking acquire, `ConcurrencyExhausted`
   instead of queuing, cancellation-safe release on both execution
   paths. tokio gains the `sync` feature (Semaphore).
+- Design records: `docs/admission-control-plan.md` and four ADRs under
+  `docs/decisions/`.
+
+### Fixed
+
+- Admission resolves by runtime name first, falling back to the name's
+  matched allow pattern (ADR-0001, amendment 1). Pattern-only keys were
+  too coarse — one `org.gnostr/**` allow pattern covered every
+  subsystem, making per-subsystem priorities inexpressible. Found by
+  the gnostr admission demo, which passes end to end against this
+  release.
 
 ## [0.8.2] - 2026-11-13
 
